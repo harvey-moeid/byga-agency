@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "byga-agency",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-10-11",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/__scheduled"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "byga-agency",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "byga-agency-assets",
+    },
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *", "0 * * * *", "0 1 * * *"],
+  },
+  "vars": {
+    "APP_URL": "https://agency.muidsoft.com",
+  },
+}

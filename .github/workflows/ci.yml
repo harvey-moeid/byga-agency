@@ -1,0 +1,38 @@
+name: Validate and deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: CHROMIUM_PATH=$(find ~/.cache/ms-playwright -path '*/chrome-linux64/chrome' -o -path '*/chrome-linux/chrome' | head -1) npm run test:e2e
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' && vars.BYGA_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+          BYGA_APP_URL: https://agency.muidsoft.com
+          BYGA_ENABLE_WORKERS_AI: ${{ vars.BYGA_ENABLE_WORKERS_AI }}

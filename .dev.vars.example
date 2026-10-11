@@ -1,0 +1,4 @@
+# Local-only Worker settings. Copy to .dev.vars, use unique values, never commit it.
+DASHBOARD_PASSWORD="replace-with-a-long-local-password"
+ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
+APP_URL="http://127.0.0.1:5173"

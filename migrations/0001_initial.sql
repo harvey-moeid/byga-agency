@@ -1,0 +1,13 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, name TEXT NOT NULL, handle TEXT NOT NULL UNIQUE, color TEXT NOT NULL, connected INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS contents(id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), data TEXT NOT NULL, status TEXT NOT NULL, scheduled_at TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS contents_due ON contents(status, scheduled_at);
+CREATE TABLE IF NOT EXISTS competitors(id TEXT PRIMARY KEY, handle TEXT NOT NULL UNIQUE, category TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS activity(id TEXT PRIMARY KEY, room TEXT NOT NULL, message TEXT NOT NULL, time TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+INSERT OR IGNORE INTO settings VALUES(1, '{"provider":"openrouter","model":"openai/gpt-4o-mini","retentionMonths":3,"automaticDrafts":false,"notification":"none"}');
+CREATE TABLE IF NOT EXISTS credentials(name TEXT PRIMARY KEY, encrypted TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS job_locks(name TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);

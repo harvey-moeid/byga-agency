@@ -1,0 +1,47 @@
+{
+  "name": "byga-agency",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "worker:dev": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply byga-agency --local",
+    "db:migrate:remote": "wrangler d1 migrations apply byga-agency --remote",
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5.2.0",
+    "@fontsource-variable/manrope": "^5.2.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.4.0",
+    "fast-xml-parser": "^5.11.2",
+    "hono": "^4.10.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.180.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251011.0",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.180.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "esbuild": "^0.25.12",
+    "jsonc-parser": "^3.3.1",
+    "miniflare": "^4.20251008.0",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "vite": "^6.4.0",
+    "vitest": "^3.2.4",
+    "wrangler": "4.43.0"
+  }
+}
