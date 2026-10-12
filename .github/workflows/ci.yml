@@ -32,8 +32,10 @@ jobs:
       cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+      # Account and database IDs are non-secret production resource identifiers.
+      # Variables or secrets can override these verified defaults.
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID || '07086b4d368d0a37ebcbbf186e51eecf' }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID || secrets.CLOUDFLARE_D1_DATABASE_ID || '597c359f-f9a8-460f-9dcf-58e106eb3dee' }}
       BYGA_APP_URL: https://agency.muidsoft.com
       BYGA_ENABLE_WORKERS_AI: ${{ vars.BYGA_ENABLE_WORKERS_AI }}
     steps:
