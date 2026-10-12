@@ -63,4 +63,15 @@ CLOUDFLARE_D1_DATABASE_ID=<database-uuid> npm run deploy
 
 Script menghasilkan konfigurasi deploy di `.wrangler/`, menerapkan migrasi remote, dan deploy tanpa mengubah konfigurasi tracked. Untuk Workers AI gunakan `BYGA_ENABLE_WORKERS_AI=true`. Production cron: due jobs tiap 5 menit, riset dan analytics tiap jam, tren, draft berbasis referensi + retensi pukul 01:00 UTC (08:00 WIB). Frekuensi request/query serta biaya AI/R2 perlu dipantau; kuota gratis tidak diasumsikan tak terbatas.
 
-Workflow GitHub memvalidasi PR/push `main`. Deploy otomatis baru aktif setelah repository variable `BYGA_DEPLOY_ENABLED=true`, database/account variables, secret token, Worker secrets, dan R2 tersedia. Gunakan environment protection `production` bila diperlukan. Hubungkan custom domain `agency.muidsoft.com` lewat pengaturan Worker setelah deploy. Tidak ada deployment atau publikasi yang dijalankan oleh setup proyek ini.
+Workflow GitHub memvalidasi PR dan push `main` dengan unit/integration tests, typecheck, build, dan E2E Chromium. Setiap push `main` langsung deploy ke **production** setelah seluruh validasi lulus, tanpa variable `BYGA_DEPLOY_ENABLED`. Deploy juga dapat dijalankan melalui Actions → Validate and deploy → Run workflow pada branch `main`; pemicu manual pada branch lain hanya menjalankan validasi. Deployment production berjalan satu per satu agar migrasi dan deploy tidak tumpang tindih.
+
+Konfigurasi GitHub di repository atau environment `production`:
+
+| Jenis | Nama | Isi |
+| --- | --- | --- |
+| Secret | `CLOUDFLARE_API_TOKEN` | Token untuk deploy Workers, migrasi D1, dan akses binding R2 pada akun tujuan |
+| Variable | `CLOUDFLARE_ACCOUNT_ID` | ID akun Cloudflare production |
+| Variable | `CLOUDFLARE_D1_DATABASE_ID` | UUID database D1 `byga-agency` production |
+| Variable opsional | `BYGA_ENABLE_WORKERS_AI` | `true` untuk mengaktifkan binding Workers AI |
+
+Provision D1/R2 dan set Worker secrets `DASHBOARD_PASSWORD` serta `ENCRYPTION_KEY` sebelum deployment pertama. Workflow gagal dengan pesan konfigurasi yang hilang jika token/account/database belum tersedia. Untuk deployment langsung, environment `production` harus mengizinkan branch `main` dan tidak memerlukan approval manual. Script menerapkan migrasi D1 sebelum mengunggah Worker dan frontend. Hubungkan custom domain `agency.muidsoft.com` lewat pengaturan Worker setelah deploy. Menyimpan perubahan workflow secara lokal belum mengaktifkan pipeline; perubahan harus masuk ke `main` GitHub.
