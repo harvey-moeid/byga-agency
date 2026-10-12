@@ -743,12 +743,13 @@ export default {
   fetch: app.fetch,
   scheduled: (event: ScheduledController, env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(jobs(env, event.cron));
-    // Share the five-minute trigger with hourly tasks to save a cron slot.
-    // Use scheduledTime so delayed delivery still runs the intended hour.
-    if (
-      event.cron === "*/5 * * * *" &&
-      new Date(event.scheduledTime).getUTCMinutes() === 0
-    )
+    // One trigger handles five-minute, hourly, and daily tasks.
+    // Use scheduledTime so delayed delivery preserves the intended schedule.
+    const scheduled = new Date(event.scheduledTime);
+    if (event.cron === "*/5 * * * *" && scheduled.getUTCMinutes() === 0) {
       ctx.waitUntil(jobs(env, "0 * * * *"));
+      if (scheduled.getUTCHours() === 1)
+        ctx.waitUntil(jobs(env, "0 1 * * *"));
+    }
   },
 };
