@@ -24,7 +24,7 @@
     },
   ],
   "triggers": {
-    "crons": ["*/5 * * * *", "0 * * * *", "0 1 * * *"],
+    "crons": ["*/5 * * * *"],
   },
   "vars": {
     "APP_URL": "https://agency.muidsoft.com",
