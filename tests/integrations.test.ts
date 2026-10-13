@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Miniflare, createFetchMock } from "miniflare";
 import { build } from "esbuild";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { encrypt, decrypt } from "../worker/security";
 import { validatePublishOptions, validateUploadUrl } from "../worker/tiktok";
 import { deadline } from "../worker/db";
@@ -150,7 +150,12 @@ describe("Worker OAuth and publish contracts with mocked remote APIs", () => {
   beforeAll(async () => {
     const bundled = await build({
       stdin: {
-        contents: `import app from './worker/index.ts'; import {processPublishJob} from './worker/publishing.ts'; export default {fetch(req,env,ctx){const u=new URL(req.url); if(u.pathname==='/test/process') return processPublishJob(env,u.searchParams.get('id')).then(()=>new Response('ok'));return app.fetch(req,env,ctx);}}`,
+        contents: `import worker, {app,runScheduled} from './worker/index.ts'; import {processPublishJob,enqueuePublish} from './worker/publishing.ts'; import {deliverNotifications} from './worker/notifications.ts';
+          app.get('/test/process',async c=>{await processPublishJob(c.env,c.req.query('id'));return c.text('ok')});
+          app.post('/test/enqueue',async c=>c.json({id:await enqueuePublish(c.env,await c.req.json())}));
+          app.post('/test/scheduled',async c=>{const b=await c.req.json();await runScheduled(c.env,b.cron,b.time);return c.json({ok:true})});
+          app.post('/test/notifications',async c=>{await deliverNotifications(c.env);return c.json({ok:true})});
+          export default worker;`,
         resolveDir: process.cwd(),
       },
       bundle: true,
@@ -173,7 +178,9 @@ describe("Worker OAuth and publish contracts with mocked remote APIs", () => {
       fetchMock: mock,
     });
     db = await mf.getD1Database("DB");
-    for (const name of ["0001_initial.sql", "0002_integrations.sql"]) {
+    for (const name of (await readdir("migrations"))
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
       const sql = await readFile("migrations/" + name, "utf8");
       for (const statement of sql
         .split(";")
@@ -396,5 +403,575 @@ describe("Worker OAuth and publish contracts with mocked remote APIs", () => {
       .first();
     expect(job!.status).toBe("retry_wait");
     expect(Number(job!.next_at)).toBeGreaterThan(Date.now());
+  });
+  it("rejects stale edits and approvals even when the content status is unchanged", async () => {
+    await seed("revision-test");
+    const revised = await request("/api/contents/revision-test/transition", {
+      action: "revise",
+      expectedRevision: 0,
+    });
+    expect(revised.status).toBe(200);
+    const revision = ((await revised.json()) as { revision: number }).revision;
+    const edit = {
+      title: "Test",
+      caption: "New reviewed caption",
+      prompt: "Vertical",
+      expectedRevision: revision,
+    };
+    const results = await Promise.all([
+      request("/api/contents/revision-test", edit, "PATCH"),
+      request(
+        "/api/contents/revision-test",
+        { ...edit, caption: "Concurrent caption" },
+        "PATCH",
+      ),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    const stale = await request("/api/contents/revision-test/transition", {
+      action: "review",
+      fileId: "revision-test",
+      expectedRevision: revision,
+    });
+    expect(stale.status).toBe(409);
+    const current = await db
+      .prepare("SELECT data FROM contents WHERE id='revision-test'")
+      .first<{ data: string }>();
+    const item = JSON.parse(current!.data);
+    expect(item.status).toBe("draft");
+    const review = await request("/api/contents/revision-test/transition", {
+      action: "review",
+      fileId: "revision-test",
+      expectedRevision: item.revision,
+    });
+    expect(review.status).toBe(200);
+    const approved = await request("/api/contents/revision-test/transition", {
+      action: "approve",
+      expectedRevision: item.revision,
+    });
+    expect(approved.status).toBe(409);
+  });
+  it("atomically cancels an unstarted job and prevents a stale queue from restoring it", async () => {
+    await seed("cancel-test");
+    const previous = JSON.parse(
+      (await db
+        .prepare("SELECT data FROM contents WHERE id='cancel-test'")
+        .first<{ data: string }>())!.data,
+    );
+    await queue("cancel-test");
+    const rescheduled = await request("/api/contents/cancel-test/transition", {
+      action: "schedule",
+      date: "2030-01-01T09:00:00Z",
+      expectedRevision: 0,
+    });
+    expect(rescheduled.status).toBe(200);
+    expect(
+      await db
+        .prepare("SELECT id FROM publish_jobs WHERE content_id='cancel-test'")
+        .first(),
+    ).toBeNull();
+    expect((await request("/test/enqueue", previous)).status).toBe(409);
+    expect(
+      await db
+        .prepare("SELECT id FROM publish_jobs WHERE content_id='cancel-test'")
+        .first(),
+    ).toBeNull();
+    const revised = await request("/api/contents/cancel-test/transition", {
+      action: "revise",
+      expectedRevision: 1,
+    });
+    expect(revised.status).toBe(200);
+    expect((await request("/test/enqueue", previous)).status).toBe(409);
+  });
+  it("preserves approval and the job when a publisher already holds the lease", async () => {
+    await seed("leased-test");
+    const id = await queue("leased-test");
+    await db
+      .prepare(
+        "UPDATE publish_jobs SET lease='active',lease_until=? WHERE id=?",
+      )
+      .bind(Date.now() + 60000, id)
+      .run();
+    for (const action of ["revise", "schedule"]) {
+      expect(
+        (
+          await request("/api/contents/leased-test/transition", {
+            action,
+            date: "2030-01-01T09:00:00Z",
+            expectedRevision: 0,
+          })
+        ).status,
+      ).toBe(409);
+    }
+    expect(
+      (await db
+        .prepare("SELECT status FROM contents WHERE id='leased-test'")
+        .first())!.status,
+    ).toBe("approved");
+    expect(
+      (await db
+        .prepare("SELECT lease FROM publish_jobs WHERE id=?")
+        .bind(id)
+        .first())!.lease,
+    ).toBe("active");
+    await db
+      .prepare(
+        "UPDATE publish_jobs SET status='uncertain',publish_id='remote-leased',lease_until=0 WHERE id=?",
+      )
+      .bind(id)
+      .run();
+    expect(
+      (
+        await request("/api/contents/leased-test/transition", {
+          action: "revise",
+        })
+      ).status,
+    ).toBe(409);
+  });
+  it("refuses using a GLB asset as the video under review", async () => {
+    await seed("asset-test");
+    await request("/api/contents/asset-test/transition", { action: "revise" });
+    await db
+      .prepare(
+        "INSERT INTO files(id,name,size,type,created_at) VALUES('model-only','avatar.glb',100,'model/gltf-binary',?)",
+      )
+      .bind(new Date().toISOString())
+      .run();
+    expect(
+      (
+        await request("/api/contents/asset-test/transition", {
+          action: "review",
+          fileId: "model-only",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await db
+        .prepare("SELECT status FROM contents WHERE id='asset-test'")
+        .first())!.status,
+    ).toBe("draft");
+  });
+  it("rejects final approval for a creator different from the one shown in the form", async () => {
+    await seed("creator-approval");
+    await request("/api/contents/creator-approval/transition", {
+      action: "revise",
+    });
+    await request("/api/contents/creator-approval/transition", {
+      action: "review",
+      fileId: "creator-approval",
+    });
+    const rejected = await request(
+      "/api/contents/creator-approval/transition",
+      {
+        action: "approve",
+        expectedRevision: 2,
+        publishOptions: { ...options, creatorId: "different-creator" },
+      },
+    );
+    expect(rejected.status).toBe(503);
+    expect(
+      (await db
+        .prepare("SELECT status FROM contents WHERE id='creator-approval'")
+        .first())!.status,
+    ).toBe("review");
+    creatorReply();
+    const accepted = await request(
+      "/api/contents/creator-approval/transition",
+      {
+        action: "approve",
+        expectedRevision: 2,
+        publishOptions: { ...options, creatorId: "creator-one" },
+      },
+    );
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({
+      approvedCreatorId: "creator-one",
+      publishOptions: { creatorId: "creator-one" },
+    });
+  });
+  it("blocks publish if OAuth switches creator between the prerequisites and init", async () => {
+    await seed("creator-race");
+    const id = await queue("creator-race");
+    const connection = await db
+      .prepare(
+        "SELECT open_id,encrypted_tokens FROM oauth_connections WHERE account_id='a'",
+      )
+      .first<{ open_id: string; encrypted_tokens: string }>();
+    const replacement = await encrypt(
+      JSON.stringify({
+        access_token: "different-access",
+        refresh_token: "different-refresh",
+        open_id: "different-creator",
+        scope: "user.info.basic,video.list,video.publish",
+        expires_in: 86400,
+      }),
+      "test-encryption-key-for-mock-only-32",
+    );
+    let change: Promise<unknown> | undefined;
+    api
+      .intercept({
+        path: "/v2/post/publish/creator_info/query/",
+        method: "POST",
+      })
+      .reply(200, () => {
+        change = db
+          .prepare(
+            "UPDATE oauth_connections SET open_id='different-creator',encrypted_tokens=? WHERE account_id='a'",
+          )
+          .bind(replacement)
+          .run();
+        return { data: creator, error: { code: "ok" } };
+      });
+    try {
+      await request(`/test/process?id=${id}`);
+      await change;
+      expect(change).toBeDefined();
+      expect(
+        await db
+          .prepare("SELECT status,publish_id FROM publish_jobs WHERE id=?")
+          .bind(id)
+          .first(),
+      ).toMatchObject({ status: "blocked", publish_id: null });
+      expect(
+        (await db
+          .prepare("SELECT status FROM contents WHERE id='creator-race'")
+          .first())!.status,
+      ).toBe("approved");
+    } finally {
+      await db
+        .prepare(
+          "UPDATE oauth_connections SET open_id=?,encrypted_tokens=? WHERE account_id='a'",
+        )
+        .bind(connection!.open_id, connection!.encrypted_tokens)
+        .run();
+    }
+  });
+  it("serves seekable video ranges and returns 416 for invalid or unsatisfiable ranges", async () => {
+    const video = await readFile("tests/fixtures/sample.mp4");
+    for (const [range, start, end] of [
+      ["bytes=0-9", 0, 9],
+      ["bytes=-10", video.length - 10, video.length - 1],
+      [`bytes=${video.length - 5}-`, video.length - 5, video.length - 1],
+    ] as const) {
+      const response = await mf.dispatchFetch(base + "/api/files/post1", {
+        headers: { Cookie: cookie, Range: range },
+      });
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-range")).toBe(
+        `bytes ${start}-${end}/${video.length}`,
+      );
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+        new Uint8Array(video.subarray(start, end + 1)),
+      );
+    }
+    for (const range of [
+      "bytes=99999999-",
+      "bytes=9-2",
+      "bytes=-0",
+      "bytes=-",
+      "bytes=0-1,4-5",
+    ]) {
+      const response = await mf.dispatchFetch(base + "/api/files/post1", {
+        headers: { Cookie: cookie, Range: range },
+      });
+      expect(response.status).toBe(416);
+      expect(response.headers.get("content-range")).toBe(
+        `bytes */${video.length}`,
+      );
+    }
+  });
+  const encryptionKey = "test-encryption-key-for-mock-only-32";
+  async function setCredential(name: string, value: string) {
+    await db
+      .prepare(
+        "INSERT INTO credentials VALUES(?,?) ON CONFLICT(name) DO UPDATE SET encrypted=excluded.encrypted",
+      )
+      .bind(name, await encrypt(value, encryptionKey))
+      .run();
+  }
+  async function setting(fields: Record<string, unknown>) {
+    const row = await db
+      .prepare("SELECT data FROM settings WHERE id=1")
+      .first<{ data: string }>();
+    await db
+      .prepare("UPDATE settings SET data=? WHERE id=1")
+      .bind(JSON.stringify({ ...JSON.parse(row!.data), ...fields }))
+      .run();
+  }
+  it("refreshes expired OAuth tokens and stores the rotated token encrypted", async () => {
+    await db
+      .prepare("UPDATE oauth_connections SET expires_at=0 WHERE account_id='a'")
+      .run();
+    api.intercept({ path: "/v2/oauth/token/", method: "POST" }).reply(200, {
+      access_token: "rotated-access",
+      refresh_token: "rotated-refresh",
+      open_id: "creator-one",
+      scope: "user.info.basic,video.list,video.publish",
+      expires_in: 86400,
+    });
+    creatorReply();
+    expect((await request("/api/accounts/a/creator")).status).toBe(200);
+    const connection = await db
+      .prepare(
+        "SELECT encrypted_tokens,refresh_lock_until,expires_at FROM oauth_connections WHERE account_id='a'",
+      )
+      .first<{
+        encrypted_tokens: string;
+        refresh_lock_until: number;
+        expires_at: number;
+      }>();
+    expect(connection!.encrypted_tokens).not.toContain("rotated");
+    expect(
+      await decrypt(connection!.encrypted_tokens, encryptionKey),
+    ).toContain("rotated-refresh");
+    expect(connection!.refresh_lock_until).toBe(0);
+    expect(connection!.expires_at).toBeGreaterThan(Date.now());
+  });
+  it("stores live analytics history from the remote video query", async () => {
+    api
+      .intercept({
+        path: "/v2/video/query/?fields=id,view_count,like_count",
+        method: "POST",
+      })
+      .reply(200, {
+        data: { videos: [{ id: "video-1", view_count: 321, like_count: 45 }] },
+        error: { code: "ok" },
+      });
+    const synced = await request("/api/analytics/sync", {});
+    expect(await synced.json()).toEqual({ updated: 1, errors: [] });
+    const history = await db
+      .prepare(
+        "SELECT views,likes FROM analytics_history WHERE content_id='post1'",
+      )
+      .first();
+    expect(history).toMatchObject({ views: 321, likes: 45 });
+    const row = await db
+      .prepare("SELECT data FROM contents WHERE id='post1'")
+      .first<{ data: string }>();
+    expect(JSON.parse(row!.data).analyticsSyncedAt).toBeTruthy();
+  });
+  it("retains the research window across pagination and only completes after the last page", async () => {
+    await setting({ researchEnabled: true });
+    await setCredential("researchClientKey", "research-client");
+    await setCredential("researchClientSecret", "research-secret");
+    await db
+      .prepare(
+        "INSERT INTO competitors(id,handle,category) VALUES('paged','@reference','Test')",
+      )
+      .run();
+    api
+      .intercept({ path: "/v2/oauth/token/", method: "POST" })
+      .reply(200, { access_token: "research-access", expires_in: 3600 });
+    const bodies: Record<string, unknown>[] = [];
+    const captured: Promise<void>[] = [];
+    function captureBody(value: unknown) {
+      captured.push(
+        (async () => {
+          let text = "";
+          if (typeof value === "string") text = value;
+          else if (
+            value &&
+            typeof value === "object" &&
+            Symbol.asyncIterator in value
+          ) {
+            const decoder = new TextDecoder();
+            for await (const chunk of value as AsyncIterable<Uint8Array>)
+              text += decoder.decode(chunk, { stream: true });
+            text += decoder.decode();
+          } else throw new Error("Unexpected mock request body");
+          bodies.push(JSON.parse(text));
+        })(),
+      );
+    }
+    const path =
+      "/v2/research/video/query/?fields=id,username,video_description,create_time,view_count,like_count,comment_count,share_count";
+    api.intercept({ path, method: "POST" }).reply(200, (opts) => {
+      captureBody(opts.body);
+      return {
+        data: {
+          videos: [
+            {
+              id: "paged-video1",
+              username: "reference",
+              create_time: 1,
+              video_description: "#creative",
+              view_count: 10,
+            },
+          ],
+          has_more: true,
+          cursor: 10,
+          search_id: "search-one",
+        },
+        error: { code: "ok" },
+      };
+    });
+    const firstPage = await request("/api/research/sync", {});
+    expect(firstPage.status).toBe(200);
+    await Promise.all(captured);
+    expect(bodies).toHaveLength(1);
+    expect(await firstPage.json()).toMatchObject({
+      results: [{ checked: 1, videos: 1 }, { disabled: true }],
+    });
+    const interim = await db
+      .prepare("SELECT cursor,last_checked FROM competitors WHERE id='paged'")
+      .first<{ cursor: string; last_checked: string | null }>();
+    expect(JSON.parse(interim!.cursor).cursor).toBe(10);
+    expect(interim!.last_checked).toBeNull();
+    api.intercept({ path, method: "POST" }).reply(200, (opts) => {
+      captureBody(opts.body);
+      return {
+        data: {
+          videos: [
+            { id: "paged-video2", username: "reference", create_time: 2 },
+          ],
+          has_more: false,
+          cursor: 20,
+        },
+        error: { code: "ok" },
+      };
+    });
+    await request("/api/research/sync", {});
+    await Promise.all(captured);
+    expect(bodies[1]).toMatchObject({
+      cursor: 10,
+      search_id: "search-one",
+      start_date: bodies[0].start_date,
+      end_date: bodies[0].end_date,
+    });
+    expect(
+      await db
+        .prepare("SELECT cursor,last_checked FROM competitors WHERE id='paged'")
+        .first(),
+    ).toMatchObject({ cursor: null, last_checked: expect.any(String) });
+    expect(
+      (await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM research_videos WHERE competitor_id='paged'",
+        )
+        .first())!.n,
+    ).toBe(2);
+    await setting({ researchEnabled: false });
+  });
+  it("dispatches the single cron, generates once per occurrence, and honors delayed scheduledTime", async () => {
+    await setting({ automaticDrafts: true });
+    await setCredential("openrouterKey", "mock-openrouter-key");
+    let generated = 0;
+    mock
+      .get("https://openrouter.ai")
+      .intercept({ path: "/api/v1/chat/completions", method: "POST" })
+      .reply(200, () => {
+        generated++;
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "Cron draft",
+                  caption: "Cron caption",
+                  prompt: "Vertical video",
+                }),
+              },
+            },
+          ],
+        };
+      });
+    // The rate-limited job must not run as a side effect of this cron test.
+    await db
+      .prepare("UPDATE publish_jobs SET next_at=? WHERE status='retry_wait'")
+      .bind(Date.now() + 3600000)
+      .run();
+    const time = Date.parse("2030-02-01T01:00:00Z");
+    for (let i = 0; i < 2; i++)
+      expect(
+        (await request("/test/scheduled", { cron: "*/5 * * * *", time }))
+          .status,
+      ).toBe(200);
+    expect(generated).toBe(1);
+    expect(
+      (await db
+        .prepare("SELECT COUNT(*) AS n FROM cron_runs WHERE status='completed'")
+        .first())!.n,
+    ).toBe(3);
+    const offHour = Date.parse("2030-02-01T01:05:00Z");
+    await request("/test/scheduled", { cron: "*/5 * * * *", time: offHour });
+    expect(
+      (await db.prepare("SELECT COUNT(*) AS n FROM cron_runs").first())!.n,
+    ).toBe(4);
+    expect(generated).toBe(1);
+    expect(await db.prepare("SELECT name FROM job_locks").first()).toBeNull();
+    await setting({ automaticDrafts: false });
+  });
+  it("claims notification delivery once and retries rejected messages with backoff", async () => {
+    await setting({ notification: "discord" });
+    await setCredential(
+      "discordWebhook",
+      "https://discord.com/api/webhooks/123/mock-hook",
+    );
+    await db
+      .prepare(
+        "INSERT INTO notification_jobs(id,message,next_at,created_at) VALUES('notice-test','Test: posting gagal',0,?)",
+      )
+      .bind(new Date().toISOString())
+      .run();
+    let delivered = 0;
+    mock
+      .get("https://discord.com")
+      .intercept({ path: "/api/webhooks/123/mock-hook", method: "POST" })
+      .reply(503, () => {
+        delivered++;
+        return "";
+      });
+    await Promise.all([
+      request("/test/notifications", {}),
+      request("/test/notifications", {}),
+    ]);
+    expect(delivered).toBe(1);
+    const retry = await db
+      .prepare(
+        "SELECT attempts,status,next_at,lease_until FROM notification_jobs WHERE id='notice-test'",
+      )
+      .first();
+    expect(retry).toMatchObject({
+      attempts: 1,
+      status: "ready",
+      lease_until: 0,
+    });
+    expect(Number(retry!.next_at)).toBeGreaterThan(Date.now());
+    await db
+      .prepare("UPDATE notification_jobs SET next_at=0 WHERE id='notice-test'")
+      .run();
+    mock
+      .get("https://discord.com")
+      .intercept({ path: "/api/webhooks/123/mock-hook", method: "POST" })
+      .reply(204, "");
+    await request("/test/notifications", {});
+    expect(
+      await db
+        .prepare(
+          "SELECT status,lease_until FROM notification_jobs WHERE id='notice-test'",
+        )
+        .first(),
+    ).toMatchObject({ status: "sent", lease_until: 0 });
+    await setting({ notification: "telegram" });
+    await setCredential("telegramToken", "123:mock-token");
+    await setCredential("telegramChatId", "123");
+    await db
+      .prepare(
+        "INSERT INTO notification_jobs(id,message,next_at,created_at) VALUES('telegram-test','Test: konten siap di-approve',0,?)",
+      )
+      .bind(new Date().toISOString())
+      .run();
+    mock
+      .get("https://api.telegram.org")
+      .intercept({ path: "/bot123:mock-token/sendMessage", method: "POST" })
+      .reply(200, { ok: false });
+    await request("/test/notifications", {});
+    expect(
+      await db
+        .prepare(
+          "SELECT status,attempts FROM notification_jobs WHERE id='telegram-test'",
+        )
+        .first(),
+    ).toMatchObject({ status: "ready", attempts: 1 });
+    await setting({ notification: "none" });
   });
 });

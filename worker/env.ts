@@ -1,7 +1,4 @@
-export interface Env {
-  DB: D1Database;
-  FILES: R2Bucket;
-  ASSETS: Fetcher;
+export interface Env extends WorkerBindings {
   AI?: {
     run: (model: string, input: unknown) => Promise<{ response?: string }>;
   };

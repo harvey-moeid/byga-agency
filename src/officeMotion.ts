@@ -88,6 +88,46 @@ export function approachAngle(current: number, target: number, dt: number) {
   );
   return current + delta * (1 - Math.exp(-Math.min(dt, 0.05) * 9));
 }
+/** Integrate in small steps so low frame rates still travel at the same speed.
+ * Consumes reached waypoints. Cap long gaps (e.g. a background tab) at one second. */
+export function advanceWalk(
+  from: Point,
+  waypoints: Point[],
+  speed: number,
+  elapsed: number,
+) {
+  let [x, z] = from;
+  let remaining = Math.max(0, Math.min(elapsed, 1));
+  let heading: number | undefined;
+  while (remaining > 0 && waypoints.length) {
+    const dt = Math.min(remaining, 1 / 60);
+    const target = waypoints[0];
+    const dx = target[0] - x,
+      dz = target[1] - z;
+    const length = Math.hypot(dx, dz);
+    const desired =
+      waypoints.length === 1
+        ? Math.min(1.12, Math.max(0.25, length * 3))
+        : 1.12;
+    speed = desired + (speed - desired) * Math.exp(-6 * dt);
+    const step = Math.min(length, speed * dt);
+    if (length > 0.002) {
+      x += (dx / length) * step;
+      z += (dz / length) * step;
+      heading = Math.atan2(dx, dz);
+    }
+    if (length - step < 0.025) {
+      [x, z] = target;
+      waypoints.shift();
+    }
+    remaining -= dt;
+  }
+  return {
+    position: [x, z] as Point,
+    speed: waypoints.length ? speed : 0,
+    heading,
+  };
+}
 export function avatarClip(names: string[], state: WorkAnimation) {
   const rules: Record<WorkAnimation, RegExp[]> = {
     Idle: [/^idle$/i, /idle|breath/i],

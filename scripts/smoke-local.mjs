@@ -1,10 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-const base = "http://127.0.0.1:8787";
-const password = (await readFile(".dev.vars", "utf8")).match(
-  /^DASHBOARD_PASSWORD="([^"]+)"/m,
-)?.[1];
+const base = process.env.BYGA_SMOKE_BASE_URL || "http://127.0.0.1:8787";
+const password =
+  process.env.BYGA_SMOKE_PASSWORD ||
+  (await readFile(".dev.vars", "utf8")).match(
+    /^DASHBOARD_PASSWORD="([^"]+)"/m,
+  )?.[1];
 if (!password)
   throw new Error("Local .dev.vars required; values are never logged.");
 let cookie = "";
@@ -32,7 +34,21 @@ const q = (value) => `'${String(value).replaceAll("'", "''")}'`;
 function sql(file) {
   execFileSync(
     "npx",
-    ["wrangler", "d1", "execute", "byga-agency", "--local", "--file", file],
+    [
+      "wrangler",
+      "d1",
+      "execute",
+      "byga-agency",
+      "--local",
+      "--file",
+      file,
+      ...(process.env.BYGA_SMOKE_CONFIG
+        ? ["--config", process.env.BYGA_SMOKE_CONFIG]
+        : []),
+      ...(process.env.BYGA_SMOKE_PERSIST_TO
+        ? ["--persist-to", process.env.BYGA_SMOKE_PERSIST_TO]
+        : []),
+    ],
     {
       stdio: "pipe",
       env: {

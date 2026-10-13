@@ -55,7 +55,7 @@ import {
   type Activity,
 } from "./domain";
 import { saveVideo, getVideo, deleteVideo } from "./storage";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import {
   PublishApproval,
   PublishQueue,
@@ -228,6 +228,8 @@ export default function App() {
   const [detail, setDetail] = useState<Content | null>(null);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const workspaceRequest = useRef(0);
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState(false);
   const [filter, setFilter] = useState("all");
@@ -272,22 +274,35 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
   useEffect(() => {
+    let alive = true;
+    const requestId = ++workspaceRequest.current;
     if (live)
       api<Workspace>("/workspace")
         .then((data) => {
+          if (!alive || requestId !== workspaceRequest.current) return;
           setWorkspace(data);
           setFormSettings(data.settings);
           setLoggedIn(true);
         })
-        .catch(() => setLoggedIn(false));
+        .catch((error) => {
+          if (!alive || requestId !== workspaceRequest.current) return;
+          setLoggedIn(false);
+          if (!(error instanceof ApiError && error.status === 401))
+            setToast(error.message);
+        });
+    return () => {
+      alive = false;
+    };
   }, [live]);
   useEffect(() => {
     if (detail) {
       setEditCaption(detail.caption);
       setEditPrompt(detail.prompt);
-      setScheduleDate("");
+      setScheduleDate(
+        detail.scheduledAt ? dateInput(detail.scheduledAt, timezone) : "",
+      );
     }
-  }, [detail?.id]);
+  }, [detail?.id, detail?.status]);
   const account = (id: string) => workspace.accounts.find((a) => a.id === id);
   const pending = workspace.contents.filter(
     (c) => c.status === "review",
@@ -315,19 +330,24 @@ export default function App() {
     setDetail(item);
   };
   async function task(fn: () => Promise<void>) {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
+    workspaceRequest.current++;
     setBusy(true);
     try {
       await fn();
     } catch (e) {
+      if (e instanceof ApiError && e.status === 401) setLoggedIn(false);
       setToast(e instanceof Error ? e.message : "Terjadi kesalahan.");
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
   async function refresh() {
+    const requestId = ++workspaceRequest.current;
     const data = await api<Workspace>("/workspace");
-    setWorkspace(data);
+    if (requestId === workspaceRequest.current) setWorkspace(data);
     return data as Workspace;
   }
   async function generate(e: FormEvent) {
@@ -370,12 +390,21 @@ export default function App() {
     fileId?: string,
   ) {
     await task(async () => {
+      if (
+        (action === "approve" || action === "review") &&
+        detail?.id === item.id &&
+        (editCaption !== item.caption || editPrompt !== item.prompt)
+      )
+        throw new Error(
+          "Simpan edit caption dan prompt sebelum melanjutkan review atau approval.",
+        );
       if (live) {
         const next = await api<Content>(`/contents/${item.id}/transition`, {
           action,
           date: scheduleDate ? localToISO(scheduleDate, timezone) : undefined,
           publishOptions: action === "approve" ? publishOptions : undefined,
           fileId,
+          expectedRevision: item.revision || 0,
         });
         await refresh();
         setDetail(next);
@@ -403,6 +432,14 @@ export default function App() {
   }
   async function upload(file: File, item?: Content) {
     await task(async () => {
+      if (
+        item &&
+        detail?.id === item.id &&
+        (editCaption !== item.caption || editPrompt !== item.prompt)
+      )
+        throw new Error(
+          "Simpan edit caption dan prompt sebelum mengirim video untuk review.",
+        );
       if (file.size > 50 * 1024 * 1024) throw new Error("Maksimal 50 MB.");
       const header = new Uint8Array(await file.slice(0, 20).arrayBuffer());
       const glb = new TextDecoder().decode(header.slice(0, 4)) === "glTF";
@@ -422,6 +459,7 @@ export default function App() {
       )
         throw new Error("Format file tidak valid.");
       if (glb) {
+        if (file.size < 20) throw new Error("GLB tidak valid.");
         const data = new DataView(await file.arrayBuffer());
         if (
           data.getUint32(4, true) !== 2 ||
@@ -453,6 +491,7 @@ export default function App() {
           const next = await api<Content>(`/contents/${item.id}/transition`, {
             action: "review",
             fileId: id,
+            expectedRevision: item.revision || 0,
           });
           await refresh();
           setDetail(next);
@@ -492,21 +531,48 @@ export default function App() {
   }
   useEffect(() => {
     setPublishOptions(undefined);
-  }, [detail?.id]);
+  }, [detail?.id, detail?.status, detail?.revision]);
   useEffect(() => {
     if (!live || !loggedIn) return;
+    let alive = true,
+      refreshing = false;
     const timer = setInterval(() => {
+      if (
+        document.visibilityState !== "visible" ||
+        refreshing ||
+        busyRef.current
+      )
+        return;
+      refreshing = true;
+      const requestId = ++workspaceRequest.current;
       api<Workspace>("/workspace")
         .then((data) => {
+          if (!alive || requestId !== workspaceRequest.current) return;
           setWorkspace(data);
           setDetail((d) => {
             const next = d && data.contents.find((x) => x.id === d.id);
             return next && next.status !== d?.status ? next : d;
           });
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (
+            alive &&
+            requestId === workspaceRequest.current &&
+            error instanceof ApiError &&
+            error.status === 401
+          ) {
+            setLoggedIn(false);
+            setToast("Sesi kedaluwarsa. Masuk kembali untuk melanjutkan.");
+          }
+        })
+        .finally(() => {
+          refreshing = false;
+        });
     }, 15000);
-    return () => clearInterval(timer);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, [live, loggedIn]);
   useEffect(() => {
     const id = workspace.settings.avatarAssetId;
@@ -542,6 +608,7 @@ export default function App() {
         await api("/contents/" + id + "/transition", {
           action: "schedule",
           date: next.scheduledAt,
+          expectedRevision: item.revision || 0,
         });
         await refresh();
       } else
@@ -696,7 +763,8 @@ export default function App() {
             e.preventDefault();
             task(async () => {
               await api("/login", { password: loginPassword });
-              await refresh();
+              const data = await refresh();
+              setFormSettings(data.settings);
               setLoggedIn(true);
               setLoginPassword("");
             });
@@ -726,11 +794,15 @@ export default function App() {
           </button>
           <button
             type="button"
+            disabled={busy}
             className="text-button"
             onClick={() => {
               setWorkspace(initial());
               setFormSettings(initial().settings);
               setLive(false);
+              setLoggedIn(false);
+              setKeys({});
+              setDetail(null);
               history.replaceState(null, "", location.pathname);
             }}
           >
@@ -1547,10 +1619,10 @@ export default function App() {
                 <div>
                   <strong>Approval tetap di tangan Anda</strong>
                   <p>
-                    Memerlukan approval TikTok Developer API dan implementasi
-                    konektor. Mode demo tidak pernah mengirim post. Scheduler
-                    live menandai pekerjaan jatuh tempo sebagai gagal dengan
-                    alasan yang jelas.
+                    Hubungkan akun TikTok dan lengkapi final approval sebelum
+                    publish. Antrean live mengirim video melalui API resmi dan
+                    menunggu konfirmasi TikTok; credential yang belum lengkap
+                    memblokir pekerjaan. Demo tidak mengirim post.
                   </p>
                 </div>
               </div>
@@ -1846,6 +1918,8 @@ export default function App() {
                       task(async () => {
                         await api("/logout", {});
                         setLoggedIn(false);
+                        setKeys({});
+                        setDetail(null);
                       });
                     else {
                       setLive(true);
@@ -2492,21 +2566,18 @@ export default function App() {
                     onClick={() =>
                       task(async () => {
                         if (live) {
-                          await api(
+                          const saved = await api<Content>(
                             "/contents/" + detail.id,
                             {
                               title: detail.title,
                               caption: editCaption,
                               prompt: editPrompt,
+                              expectedRevision: detail.revision || 0,
                             },
                             "PATCH",
                           );
                           await refresh();
-                          setDetail({
-                            ...detail,
-                            caption: editCaption,
-                            prompt: editPrompt,
-                          });
+                          setDetail(saved);
                         } else
                           updateContent(
                             {
@@ -2539,11 +2610,19 @@ export default function App() {
                   </button>
                 )}
               </div>
+              {["draft", "review"].includes(detail.status) &&
+                (editCaption !== detail.caption ||
+                  editPrompt !== detail.prompt) && (
+                  <p className="notice" role="status">
+                    Ada edit yang belum tersimpan. Simpan edit sebelum review
+                    atau approval.
+                  </p>
+                )}
               {detail.status === "review" &&
                 live &&
                 account(detail.accountId)?.connected && (
                   <PublishApproval
-                    key={detail.id}
+                    key={`${detail.id}:${detail.revision || 0}:${detail.caption}:${detail.prompt}`}
                     accountId={detail.accountId}
                     onChange={setPublishOptions}
                   />
@@ -2553,6 +2632,8 @@ export default function App() {
                   className="button primary full"
                   disabled={
                     busy ||
+                    editCaption !== detail.caption ||
+                    editPrompt !== detail.prompt ||
                     (live &&
                       !!account(detail.accountId)?.connected &&
                       !publishOptions)

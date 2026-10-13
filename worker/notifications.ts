@@ -17,12 +17,19 @@ export async function notify(
 }
 export async function deliverNotifications(env: Env) {
   const rows = await env.DB.prepare(
-    "SELECT * FROM notification_jobs WHERE status='ready' AND next_at<=? LIMIT 5",
+    "SELECT * FROM notification_jobs WHERE status='ready' AND next_at<=? AND lease_until<=? ORDER BY next_at LIMIT 5",
   )
-    .bind(Date.now())
+    .bind(Date.now(), Date.now())
     .all<{ id: string; message: string; attempts: number }>();
   const settings = await readSettings(env);
   for (const job of rows.results) {
+    const nonce = crypto.randomUUID();
+    const claimed = await env.DB.prepare(
+      "UPDATE notification_jobs SET lease=?,lease_until=? WHERE id=? AND status='ready' AND lease_until<=? AND next_at<=?",
+    )
+      .bind(nonce, Date.now() + 60000, job.id, Date.now(), Date.now())
+      .run();
+    if (!claimed.meta.changes) continue;
     try {
       let response: Response;
       if (settings.notification === "discord") {
@@ -54,28 +61,33 @@ export async function deliverNotifications(env: Env) {
         );
       } else {
         await env.DB.prepare(
-          "UPDATE notification_jobs SET status='cancelled' WHERE id=?",
+          "UPDATE notification_jobs SET status='cancelled',lease=NULL,lease_until=0 WHERE id=? AND lease=?",
         )
-          .bind(job.id)
+          .bind(job.id, nonce)
           .run();
         continue;
       }
       if (!response.ok) throw new Error("Delivery rejected");
+      if (settings.notification === "telegram") {
+        const result = (await response.json()) as { ok?: boolean };
+        if (result.ok !== true) throw new Error("Telegram rejected delivery");
+      } else await response.body?.cancel();
       await env.DB.prepare(
-        "UPDATE notification_jobs SET status='sent' WHERE id=?",
+        "UPDATE notification_jobs SET status='sent',lease=NULL,lease_until=0 WHERE id=? AND lease=?",
       )
-        .bind(job.id)
+        .bind(job.id, nonce)
         .run();
     } catch {
       const attempts = job.attempts + 1;
       await env.DB.prepare(
-        "UPDATE notification_jobs SET attempts=?,status=?,next_at=? WHERE id=?",
+        "UPDATE notification_jobs SET attempts=?,status=?,next_at=?,lease=NULL,lease_until=0 WHERE id=? AND lease=?",
       )
         .bind(
           attempts,
           attempts >= 5 ? "failed" : "ready",
           Date.now() + backoff(attempts),
           job.id,
+          nonce,
         )
         .run();
       if (attempts >= 5)

@@ -19,6 +19,7 @@ export interface Account {
 }
 export interface Content {
   id: string;
+  revision?: number;
   accountId: string;
   title: string;
   caption: string;
@@ -270,6 +271,7 @@ export function revise(content: Content): Content {
 }
 
 export interface PublishOptions {
+  creatorId?: string;
   privacyLevel: string;
   disableComment: boolean;
   disableDuet: boolean;
@@ -282,6 +284,7 @@ export interface PublishOptions {
   publishConsent: boolean;
 }
 export interface CreatorInfo {
+  creatorId?: string;
   creator_avatar_url?: string;
   creator_username?: string;
   creator_nickname: string;

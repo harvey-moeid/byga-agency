@@ -11,7 +11,17 @@ import {
 } from "../src/domain";
 import { encrypt, decrypt, hash, constantEqual } from "./security";
 import type { Env } from "./env";
-import { credential, readSettings, log, content, save, deadline } from "./db";
+import {
+  credential,
+  readSettings,
+  log,
+  content,
+  save,
+  deadline,
+  checkRevision,
+  deleteContent,
+  ContentConflict,
+} from "./db";
 import { notify, deliverNotifications } from "./notifications";
 import { generate } from "./ai";
 import {
@@ -24,7 +34,6 @@ import {
 import {
   registerPublishRoutes,
   enqueuePublish,
-  cancelUnstartedJob,
   publishDue,
 } from "./publishing";
 import {
@@ -66,7 +75,11 @@ app.onError((err, c) => {
   console.error("API error", err.name);
   return c.json(
     { error: err instanceof z.ZodError ? "Input tidak valid." : err.message },
-    err instanceof IntegrationUnavailable ? 503 : 400,
+    err instanceof IntegrationUnavailable
+      ? 503
+      : err instanceof ContentConflict
+        ? 409
+        : 400,
   );
 });
 app.use("/api/*", async (c, next) => {
@@ -319,52 +332,62 @@ app.patch("/api/contents/:id", async (c) => {
       title: z.string().min(1).max(200),
       caption: z.string().max(2200),
       prompt: z.string().max(8000),
+      expectedRevision: z.number().int().nonnegative().optional(),
     })
     .parse(await c.req.json());
-  await save(c.env, { ...old, ...edits }, old.status);
-  return c.json({ ok: true });
+  const { expectedRevision, ...fields } = edits;
+  checkRevision(old, expectedRevision);
+  const next = { ...old, ...fields };
+  await save(c.env, next, old);
+  return c.json(next);
 });
 app.delete("/api/contents/:id", async (c) => {
   const item = await content(c.env, c.req.param("id"));
   if (!["draft", "review", "failed"].includes(item.status))
     throw new Error("Kembalikan ke draft sebelum menghapus konten.");
-  await cancelUnstartedJob(c.env, item.id);
-  await c.env.DB.prepare("DELETE FROM contents WHERE id=? AND status=?")
-    .bind(item.id, item.status)
-    .run();
+  await deleteContent(c.env, item);
   return c.json({ ok: true });
 });
 app.post("/api/contents/:id/transition", async (c) => {
-  const { action, date, fileId, publishOptions } = z
+  const { action, date, fileId, publishOptions, expectedRevision } = z
     .object({
       action: z.enum(["review", "approve", "schedule", "publish", "revise"]),
       date: z.string().optional(),
       fileId: z.string().optional(),
       publishOptions: publishOptionsSchema.optional(),
+      expectedRevision: z.number().int().nonnegative().optional(),
     })
     .parse(await c.req.json());
   const old = await content(c.env, c.req.param("id"));
+  checkRevision(old, expectedRevision);
   let next = old;
   if (action === "review") {
     if (old.status !== "draft")
       throw new Error("Hanya draft dapat dikirim untuk review.");
     if (
       !fileId ||
-      !(await c.env.DB.prepare("SELECT id FROM files WHERE id=?")
+      !(await c.env.DB.prepare(
+        "SELECT id FROM files WHERE id=? AND type IN ('video/mp4','video/webm')",
+      )
         .bind(fileId)
         .first())
     )
-      throw new Error("Upload video dahulu.");
+      throw new Error("Upload video MP4 atau WebM dahulu.");
     next = { ...old, fileId, status: "review" };
   }
   if (action === "revise") {
-    await cancelUnstartedJob(c.env, old.id);
     next = revise(old);
   }
   if (action === "approve") {
     next = approve(old);
     if (publishOptions) {
-      const info = await creatorInfo(c.env, old.accountId);
+      if (expectedRevision === undefined || !publishOptions.creatorId)
+        throw new ContentConflict();
+      const info = await creatorInfo(
+        c.env,
+        old.accountId,
+        publishOptions.creatorId,
+      );
       const file = await c.env.DB.prepare("SELECT media FROM files WHERE id=?")
         .bind(old.fileId)
         .first<{ media: string | null }>();
@@ -381,11 +404,11 @@ app.post("/api/contents/:id/transition", async (c) => {
       )
         .bind(old.accountId)
         .first<{ open_id: string }>();
-      if (!identity)
+      if (!identity || identity.open_id !== info.creatorId)
         throw new IntegrationUnavailable(
           "Hubungkan akun sebelum final approval.",
         );
-      next.approvedCreatorId = identity.open_id;
+      next.approvedCreatorId = info.creatorId;
     }
   }
   if (action === "schedule") next = schedule(old, date || "");
@@ -395,7 +418,7 @@ app.post("/api/contents/:id/transition", async (c) => {
       throw new IntegrationUnavailable(
         "Hubungkan akun dan approve ulang dengan privasi serta consent TikTok.",
       );
-    const info = await creatorInfo(c.env, old.accountId);
+    const info = await creatorInfo(c.env, old.accountId, old.approvedCreatorId);
     const file = await c.env.DB.prepare("SELECT media FROM files WHERE id=?")
       .bind(old.fileId)
       .first<{ media: string | null }>();
@@ -413,8 +436,7 @@ app.post("/api/contents/:id/transition", async (c) => {
     );
     return c.json(old);
   }
-  if (action === "schedule") await cancelUnstartedJob(c.env, old.id);
-  await save(c.env, next, old.status);
+  await save(c.env, next, old, action === "schedule" || action === "revise");
   await log(
     c.env,
     action === "schedule" ? "schedule" : "content",
@@ -437,7 +459,8 @@ app.post("/api/contents/:id/transition", async (c) => {
 });
 app.post("/api/files", async (c) => {
   const size = Number(c.req.header("Content-Length"));
-  if (size > 50 * 1024 * 1024) return c.json({ error: "Maksimal 50 MB." }, 413);
+  if (size > 50 * 1024 * 1024 + 16384)
+    return c.json({ error: "Maksimal 50 MB." }, 413);
   const form = await c.req.formData();
   const file = form.get("file");
   if (
@@ -457,6 +480,7 @@ app.post("/api/files", async (c) => {
   if (!mp4 && !webm && !glb)
     throw new Error("Format harus MP4, WebM, atau GLB.");
   if (glb) {
+    if (file.size < 20) throw new Error("GLB tidak valid.");
     if (file.size > 10 * 1024 * 1024)
       throw new Error("Aset GLB maksimal 10 MB.");
     const data = new DataView(await file.arrayBuffer());
@@ -515,9 +539,40 @@ app.post("/api/files", async (c) => {
 });
 app.get("/api/files/:id", async (c) => {
   const range = c.req.header("Range");
+  let selection: { offset: number; length: number } | undefined;
+  if (range) {
+    const metadata = await c.env.FILES.head(c.req.param("id"));
+    if (!metadata) return c.notFound();
+    const parts = /^bytes=(\d*)-(\d*)$/.exec(range);
+    const start = parts?.[1] ? Number(parts[1]) : undefined;
+    const end = parts?.[2] ? Number(parts[2]) : undefined;
+    const offset = start ?? Math.max(0, metadata.size - (end ?? 0));
+    const last =
+      start === undefined
+        ? metadata.size - 1
+        : Math.min(end ?? metadata.size - 1, metadata.size - 1);
+    if (
+      !parts ||
+      (!parts[1] && !parts[2]) ||
+      !Number.isSafeInteger(offset) ||
+      (end !== undefined && !Number.isSafeInteger(end)) ||
+      offset < 0 ||
+      offset >= metadata.size ||
+      last < offset
+    )
+      return new Response(null, {
+        status: 416,
+        headers: {
+          "Content-Range": `bytes */${metadata.size}`,
+          "Cache-Control": "private, no-store",
+          "Accept-Ranges": "bytes",
+        },
+      });
+    selection = { offset, length: last - offset + 1 };
+  }
   const file = await c.env.FILES.get(
     c.req.param("id"),
-    range ? { range: c.req.raw.headers } : undefined,
+    selection ? { range: selection } : undefined,
   );
   if (!file) return c.notFound();
   const headers = new Headers({
@@ -527,9 +582,8 @@ app.get("/api/files/:id", async (c) => {
     "Cache-Control": "private, no-store",
     "Accept-Ranges": "bytes",
   });
-  if (range && file.range && "offset" in file.range) {
-    const offset = file.range.offset || 0,
-      length = file.range.length || file.size;
+  if (selection) {
+    const { offset, length } = selection;
     headers.set(
       "Content-Range",
       `bytes ${offset}-${offset + length - 1}/${file.size}`,
@@ -537,6 +591,7 @@ app.get("/api/files/:id", async (c) => {
     headers.set("Content-Length", String(length));
     return new Response(file.body, { status: 206, headers });
   }
+  headers.set("Content-Length", String(file.size));
   return new Response(file.body, { headers });
 });
 app.delete("/api/files/:id", async (c) => {
@@ -635,9 +690,12 @@ registerPublishRoutes(app);
 registerResearchRoutes(app);
 registerAnalyticsRoutes(app);
 app.notFound((c) => c.json({ error: "Endpoint tidak ditemukan." }, 404));
-async function jobs(env: Env, cron: string) {
+async function jobs(env: Env, cron: string, scheduledTime = Date.now()) {
   const now = Date.now();
-  const expiresAt = now + 600000;
+  const expiresAt = now + 1200000;
+  const interval =
+    cron === "0 1 * * *" ? 86400000 : cron === "0 * * * *" ? 3600000 : 300000;
+  const occurrence = Math.floor(scheduledTime / interval) * interval;
   const lock = await env.DB.prepare(
     "INSERT INTO job_locks VALUES(?,?) ON CONFLICT(name) DO UPDATE SET expires_at=excluded.expires_at WHERE job_locks.expires_at < ?",
   )
@@ -645,9 +703,21 @@ async function jobs(env: Env, cron: string) {
     .run();
   if (!lock.meta.changes) return;
   try {
+    // Keep a durable receipt after the lease is released: repeated delivery must
+    // not generate another paid AI draft for the same scheduled occurrence.
+    const receipt = await env.DB.prepare(
+      "INSERT OR IGNORE INTO cron_runs(name,scheduled_at,status,started_at) VALUES(?,?,'running',?)",
+    )
+      .bind(cron, occurrence, now)
+      .run();
+    if (!receipt.meta.changes) return;
     if (cron === "*/5 * * * *") {
-      await publishDue(env);
-      await deliverNotifications(env);
+      const outcomes = await Promise.allSettled([
+        publishDue(env),
+        deliverNotifications(env),
+      ]);
+      if (outcomes.some((result) => result.status === "rejected"))
+        throw new Error("Sebagian pekerjaan publish/notifikasi gagal.");
     }
     if (cron === "0 * * * *") {
       try {
@@ -685,6 +755,9 @@ async function jobs(env: Env, cron: string) {
         env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now),
         env.DB.prepare("DELETE FROM login_attempts WHERE expires_at < ?").bind(
           now,
+        ),
+        env.DB.prepare("DELETE FROM cron_runs WHERE started_at < ?").bind(
+          now - 30 * 86400000,
         ),
         env.DB.prepare(
           "DELETE FROM notification_jobs WHERE created_at < ? AND status!='ready'",
@@ -732,24 +805,63 @@ async function jobs(env: Env, cron: string) {
           }
       }
     }
+    await env.DB.prepare(
+      "UPDATE cron_runs SET status='completed',finished_at=? WHERE name=? AND scheduled_at=?",
+    )
+      .bind(Date.now(), cron, occurrence)
+      .run();
+  } catch (error) {
+    await env.DB.prepare(
+      "UPDATE cron_runs SET status='failed',finished_at=? WHERE name=? AND scheduled_at=?",
+    )
+      .bind(Date.now(), cron, occurrence)
+      .run();
+    console.error(
+      JSON.stringify({
+        event: "cron_failed",
+        cron,
+        scheduledTime,
+        error: error instanceof Error ? error.name : "Error",
+      }),
+    );
+    await log(
+      env,
+      "publish",
+      `Pekerjaan terjadwal ${cron} gagal. Periksa log Worker.`,
+    );
+    throw error;
   } finally {
     await env.DB.prepare("DELETE FROM job_locks WHERE name=? AND expires_at=?")
       .bind(cron, expiresAt)
       .run();
   }
 }
-export { app, jobs };
+async function runScheduled(env: Env, cron: string, scheduledTime: number) {
+  const scheduled = new Date(scheduledTime);
+  const operations = [jobs(env, cron, scheduledTime)];
+  if (cron === "*/5 * * * *" && scheduled.getUTCMinutes() === 0) {
+    operations.push(
+      (async () => {
+        const hourly = await Promise.allSettled([
+          jobs(env, "0 * * * *", scheduledTime),
+        ]);
+        // Build the daily report after the hourly research/analytics has finished.
+        if (scheduled.getUTCHours() === 1)
+          await jobs(env, "0 1 * * *", scheduledTime);
+        if (hourly[0].status === "rejected") throw hourly[0].reason;
+      })(),
+    );
+  }
+  const outcomes = await Promise.allSettled(operations);
+  if (outcomes.some((result) => result.status === "rejected"))
+    throw new Error(
+      "Sebagian pekerjaan cron gagal; pekerjaan lain telah dijalankan.",
+    );
+}
+export { app, jobs, runScheduled };
 export default {
   fetch: app.fetch,
   scheduled: (event: ScheduledController, env: Env, ctx: ExecutionContext) => {
-    ctx.waitUntil(jobs(env, event.cron));
-    // One trigger handles five-minute, hourly, and daily tasks.
-    // Use scheduledTime so delayed delivery preserves the intended schedule.
-    const scheduled = new Date(event.scheduledTime);
-    if (event.cron === "*/5 * * * *" && scheduled.getUTCMinutes() === 0) {
-      ctx.waitUntil(jobs(env, "0 * * * *"));
-      if (scheduled.getUTCHours() === 1)
-        ctx.waitUntil(jobs(env, "0 1 * * *"));
-    }
+    ctx.waitUntil(runScheduled(env, event.cron, event.scheduledTime));
   },
 };

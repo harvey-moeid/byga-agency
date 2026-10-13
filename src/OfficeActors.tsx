@@ -12,6 +12,7 @@ import OfficeAvatar, { type ModelStatus } from "./OfficeAvatar";
 import { rooms, type Room } from "./domain";
 import {
   approachAngle,
+  advanceWalk,
   jobAnimations,
   planRoute,
   stations,
@@ -19,6 +20,7 @@ import {
   visitingStations,
   workLabels,
   type WorkAnimation,
+  type Point,
 } from "./officeMotion";
 export interface Presence {
   state: WorkAnimation;
@@ -154,7 +156,7 @@ export default function OfficeActors({
   const [moving, setMoving] = useState(false);
   const [model, setModel] = useState<ModelStatus>("loading");
   const [route, setRoute] = useState<THREE.Vector3[]>([]);
-  const waypoints = useRef<THREE.Vector3[]>([]);
+  const waypoints = useRef<Point[]>([]);
   const speed = useRef(0);
   const resting = useRef(0);
   const reached = useRef<Room>("content");
@@ -172,10 +174,9 @@ export default function OfficeActors({
   }, [selected, activeRoom]);
   useEffect(() => {
     const p = traveller.current.position;
-    const path = planRoute([p.x, p.z], destination).map(
-      ([x, z]) => new THREE.Vector3(x, -0.035, z),
-    );
-    waypoints.current = path;
+    const points = planRoute([p.x, p.z], destination);
+    const path = points.map(([x, z]) => new THREE.Vector3(x, -0.035, z));
+    waypoints.current = points;
     setRoute([p.clone(), ...path]);
     setMoving(path.length > 0);
     speed.current = 0;
@@ -190,38 +191,28 @@ export default function OfficeActors({
   }, [state, arrived, destination, model, onPresence]);
   useFrame((_, rawDelta) => {
     if (!playing || model === "loading") return;
-    const dt = Math.min(rawDelta, 0.15);
+    const dt = Math.min(rawDelta, 1);
     const actor = traveller.current;
     const target = waypoints.current[0];
     if (target) {
-      const dx = target.x - actor.position.x,
-        dz = target.z - actor.position.z;
-      const distance = Math.hypot(dx, dz);
-      const final = waypoints.current.length === 1;
-      const desired = final
-        ? Math.min(1.12, Math.max(0.25, distance * 3))
-        : 1.12;
-      speed.current = THREE.MathUtils.damp(speed.current, desired, 6, dt);
-      const step = Math.min(distance, speed.current * dt);
-      if (distance > 0.002) {
-        actor.position.x += (dx / distance) * step;
-        actor.position.z += (dz / distance) * step;
-        actor.rotation.y = approachAngle(
-          actor.rotation.y,
-          Math.atan2(dx, dz),
-          dt,
-        );
+      const step = advanceWalk(
+        [actor.position.x, actor.position.z],
+        waypoints.current,
+        speed.current,
+        dt,
+      );
+      actor.position.x = step.position[0];
+      actor.position.z = step.position[1];
+      speed.current = step.speed;
+      if (step.heading !== undefined) {
+        actor.rotation.y = approachAngle(actor.rotation.y, step.heading, dt);
       }
-      if (distance < 0.025) {
-        actor.position.copy(target);
-        waypoints.current.shift();
-        if (!waypoints.current.length) {
-          reached.current = destination;
-          setArrived(destination);
-          setMoving(false);
-          resting.current = 0;
-          speed.current = 0;
-        }
+      if (!waypoints.current.length) {
+        reached.current = destination;
+        setArrived(destination);
+        setMoving(false);
+        resting.current = 0;
+        speed.current = 0;
       }
     } else {
       actor.rotation.y = approachAngle(

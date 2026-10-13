@@ -3,6 +3,7 @@
   "name": "byga-agency",
   "main": "worker/index.ts",
   "compatibility_date": "2025-10-11",
+  "observability": { "enabled": true },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

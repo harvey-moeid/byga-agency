@@ -27,21 +27,50 @@ export async function content(env: Env, id: string) {
   if (!row) throw new Error("Konten tidak ditemukan.");
   return JSON.parse(row.data) as Content;
 }
-export async function save(env: Env, item: Content, oldStatus?: string) {
+export class ContentConflict extends Error {
+  constructor() {
+    super("Konten atau publish berubah. Muat ulang sebelum mencoba lagi.");
+  }
+}
+export function checkRevision(item: Content, expected?: number) {
+  if (expected !== undefined && expected !== (item.revision || 0))
+    throw new ContentConflict();
+}
+// A leased or remotely initialized job must never lose the approval it is using.
+const cancellable =
+  "lease_until<=? AND status IN ('ready','retry_wait','blocked','failed') AND (publish_id IS NULL OR status='failed')";
+export async function save(
+  env: Env,
+  item: Content,
+  previous?: Content,
+  cancelJob = false,
+) {
+  item.revision = previous ? (previous.revision || 0) + 1 : 0;
   const values = [
     JSON.stringify(item),
     item.status,
     item.scheduledAt || null,
     item.fileId || null,
   ];
-  if (oldStatus) {
-    const result = await env.DB.prepare(
-      "UPDATE contents SET data=?, status=?, scheduled_at=?, file_id=? WHERE id=? AND status=?",
-    )
-      .bind(...values, item.id, oldStatus)
-      .run();
-    if (!result.meta.changes)
-      throw new Error("Konten berubah. Muat ulang sebelum mencoba lagi.");
+  if (previous) {
+    const now = Date.now();
+    const update = env.DB.prepare(
+      `UPDATE contents SET data=?, status=?, scheduled_at=?, file_id=? WHERE id=? AND json(data)=json(?)${cancelJob ? ` AND NOT EXISTS(SELECT 1 FROM publish_jobs WHERE content_id=contents.id AND NOT (${cancellable}))` : ""}`,
+    ).bind(
+      ...values,
+      item.id,
+      JSON.stringify(previous),
+      ...(cancelJob ? [now] : []),
+    );
+    const results = cancelJob
+      ? await env.DB.batch([
+          update,
+          env.DB.prepare(
+            `DELETE FROM publish_jobs WHERE content_id=? AND ${cancellable} AND EXISTS(SELECT 1 FROM contents WHERE id=? AND json(data)=json(?))`,
+          ).bind(item.id, now, item.id, JSON.stringify(item)),
+        ])
+      : [await update.run()];
+    if (!results[0].meta.changes) throw new ContentConflict();
   } else
     await env.DB.prepare(
       "INSERT INTO contents(id,account_id,data,status,scheduled_at,created_at,file_id) VALUES(?,?,?,?,?,?,?)",
@@ -56,6 +85,14 @@ export async function save(env: Env, item: Content, oldStatus?: string) {
         item.fileId || null,
       )
       .run();
+}
+export async function deleteContent(env: Env, item: Content) {
+  const result = await env.DB.prepare(
+    `DELETE FROM contents WHERE id=? AND json(data)=json(?) AND NOT EXISTS(SELECT 1 FROM publish_jobs WHERE content_id=contents.id AND NOT (${cancellable}))`,
+  )
+    .bind(item.id, JSON.stringify(item), Date.now())
+    .run();
+  if (!result.meta.changes) throw new ContentConflict();
 }
 export function deadline(months: number, now = new Date()) {
   const year = now.getUTCFullYear(),

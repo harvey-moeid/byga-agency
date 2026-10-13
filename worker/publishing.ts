@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { Env } from "./env";
 import type { Content, PublishOptions } from "../src/domain";
-import { content, log } from "./db";
+import { content, log, ContentConflict } from "./db";
 import { encrypt, decrypt } from "./security";
 import {
   creatorInfo,
@@ -60,6 +60,7 @@ async function setContent(
       status,
       JSON.stringify({
         ...item,
+        revision: (item.revision || 0) + 1,
         status,
         error,
         platformVideoId: videoId || item.platformVideoId,
@@ -78,6 +79,9 @@ export async function enqueuePublish(
   if (!["approved", "scheduled"].includes(item.status))
     throw new Error("Konten harus disetujui sebelum publish.");
   if (!item.fileId) throw new Error("Video belum tersedia.");
+  const current = await content(env, item.id);
+  if (JSON.stringify(current) !== JSON.stringify(item))
+    throw new ContentConflict();
   const row = await env.DB.prepare(
     "SELECT id,status FROM publish_jobs WHERE content_id=?",
   )
@@ -93,52 +97,30 @@ export async function enqueuePublish(
   const id = crypto.randomUUID(),
     now = new Date().toISOString();
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO publish_jobs(id,content_id,account_id,status,next_at,created_at,updated_at) VALUES(?,?,?,'ready',?,?,?)",
+    "INSERT OR IGNORE INTO publish_jobs(id,content_id,account_id,status,next_at,created_at,updated_at) SELECT ?,?,?,'ready',?,?,? FROM contents WHERE id=? AND status IN ('approved','scheduled') AND json(data)=json(?)",
   )
-    .bind(id, item.id, item.accountId, due, now, now)
-    .run();
-  return (await env.DB.prepare("SELECT id FROM publish_jobs WHERE content_id=?")
-    .bind(item.id)
-    .first<{ id: string }>())!.id;
-}
-export async function cancelUnstartedJob(env: Env, id: string) {
-  const job = await env.DB.prepare(
-    "SELECT status,publish_id,lease_until FROM publish_jobs WHERE content_id=?",
-  )
-    .bind(id)
-    .first<{
-      status: string;
-      publish_id: string | null;
-      lease_until: number;
-    }>();
-  if (
-    job &&
-    ((job.publish_id && job.status !== "failed") ||
-      job.lease_until > Date.now() ||
-      [
-        "initializing",
-        "uploading",
-        "processing",
-        "uncertain",
-        "succeeded",
-      ].includes(job.status))
-  )
-    throw new Error(
-      "Publish sudah diproses atau hasilnya belum pasti. Periksa status TikTok sebelum revisi.",
-    );
-  if (job) {
-    const deleted = await env.DB.prepare(
-      "DELETE FROM publish_jobs WHERE content_id=? AND lease_until<=? AND status IN ('ready','retry_wait','blocked','failed') AND (publish_id IS NULL OR status='failed') RETURNING id",
+    .bind(
+      id,
+      item.id,
+      item.accountId,
+      due,
+      now,
+      now,
+      item.id,
+      JSON.stringify(item),
     )
-      .bind(id, Date.now())
-      .first();
-    if (!deleted)
-      throw new Error(
-        "Publish berubah saat revisi. Muat ulang sebelum mencoba lagi.",
-      );
-  }
+    .run();
+  const queued = await env.DB.prepare(
+    "SELECT id FROM publish_jobs WHERE content_id=?",
+  )
+    .bind(item.id)
+    .first<{ id: string }>();
+  if (!queued) throw new ContentConflict();
+  return queued.id;
 }
 async function prerequisites(env: Env, item: Content) {
+  if (!["approved", "scheduled"].includes(item.status))
+    throw new ContentConflict();
   const identity = await env.DB.prepare(
     "SELECT open_id FROM oauth_connections WHERE account_id=?",
   )
@@ -177,7 +159,11 @@ async function prerequisites(env: Env, item: Content) {
     throw new IntegrationUnavailable(
       "Video untuk pipeline ini harus vertikal 9:16.",
     );
-  const creator = await creatorInfo(env, item.accountId);
+  const creator = await creatorInfo(
+    env,
+    item.accountId,
+    item.approvedCreatorId,
+  );
   validatePublishOptions(item.publishOptions, creator, details.duration);
   return media;
 }
@@ -258,7 +244,12 @@ export async function processPublishJob(env: Env, id: string) {
         publicaly_available_post_id?: string[];
       }>(
         "post/publish/status/fetch/",
-        await accessToken(env, job.account_id, "video.publish"),
+        await accessToken(
+          env,
+          job.account_id,
+          "video.publish",
+          item.approvedCreatorId,
+        ),
         { publish_id: job.publish_id },
       );
       await finish(env, job, state);
@@ -282,7 +273,12 @@ export async function processPublishJob(env: Env, id: string) {
       try {
         initialized = await tiktok(
           "post/publish/video/init/",
-          await accessToken(env, job.account_id, "video.publish"),
+          await accessToken(
+            env,
+            job.account_id,
+            "video.publish",
+            item.approvedCreatorId,
+          ),
           {
             post_info: {
               title: item.caption,
@@ -392,7 +388,10 @@ export async function processPublishJob(env: Env, id: string) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Publish gagal";
-    if (error instanceof IntegrationUnavailable) {
+    if (
+      error instanceof IntegrationUnavailable ||
+      error instanceof ContentConflict
+    ) {
       await mark(env, job, "blocked", message);
       return;
     }
@@ -441,8 +440,13 @@ export async function publishDue(env: Env) {
   )
     .bind(new Date().toISOString())
     .all<{ data: string }>();
-  for (const row of rows.results)
-    await enqueuePublish(env, JSON.parse(row.data));
+  for (const row of rows.results) {
+    try {
+      await enqueuePublish(env, JSON.parse(row.data));
+    } catch (error) {
+      if (!(error instanceof ContentConflict)) throw error;
+    }
+  }
   const jobs = await env.DB.prepare(
     "SELECT id FROM publish_jobs WHERE status IN ('ready','retry_wait','upload_pending','processing','initializing','uploading') AND next_at<=? AND lease_until<? ORDER BY next_at LIMIT 3",
   )

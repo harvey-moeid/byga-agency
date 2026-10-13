@@ -17,7 +17,7 @@ import {
 import * as THREE from "three";
 import OfficeActors, { type Presence } from "./OfficeActors";
 import { workLabels } from "./officeMotion";
-import { Pause, Play, PersonStanding, Route } from "lucide-react";
+import { Pause, Play, PersonStanding, Route, Gauge } from "lucide-react";
 import type { OrbitControls as OrbitType } from "three-stdlib";
 import { rooms, type Room } from "./domain";
 const positions: Record<Room, [number, number, number]> = {
@@ -225,6 +225,7 @@ function Scene({
   playing,
   tour,
   onPresence,
+  lightweight,
 }: {
   selected: Room | null;
   onSelect: (r: Room) => void;
@@ -238,6 +239,7 @@ function Scene({
   playing: boolean;
   tour: boolean;
   onPresence: (presence: Presence) => void;
+  lightweight: boolean;
 }) {
   const traveller = useRef<THREE.Group>(null!);
   return (
@@ -248,7 +250,7 @@ function Scene({
       <directionalLight
         position={[-8, 14, 7]}
         intensity={2.4}
-        castShadow
+        castShadow={!lightweight}
         shadow-mapSize={[1024, 1024]}
         shadow-camera-left={-12}
         shadow-camera-right={12}
@@ -477,14 +479,16 @@ function Scene({
         onAgent={onAgent}
         onPresence={onPresence}
       />
-      <ContactShadows
-        position={[0, -0.49, 0]}
-        opacity={0.28}
-        scale={24}
-        blur={2.8}
-        frames={1}
-        far={5}
-      />
+      {!lightweight && (
+        <ContactShadows
+          position={[0, -0.49, 0]}
+          opacity={0.28}
+          scale={24}
+          blur={2.8}
+          frames={1}
+          far={5}
+        />
+      )}
       <Camera
         selected={selected}
         focus={focus}
@@ -508,9 +512,10 @@ class Boundary extends Component<
 }
 type OfficeProps = Omit<
   Parameters<typeof Scene>[0],
-  "playing" | "tour" | "onPresence"
+  "playing" | "tour" | "onPresence" | "lightweight"
 > & { demo?: boolean; visible?: boolean };
 export default function Office(props: OfficeProps) {
+  const [lightweight, setLightweight] = useState(() => window.innerWidth < 700);
   const [playing, setPlaying] = useState(
     () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
@@ -554,6 +559,7 @@ export default function Office(props: OfficeProps) {
       {webgl ? (
         <div
           ref={portal}
+          data-office-quality={lightweight ? "light" : "full"}
           style={{
             position: "relative",
             width: "100%",
@@ -562,17 +568,30 @@ export default function Office(props: OfficeProps) {
           }}
         >
           <Canvas
-            shadows
+            shadows={!lightweight}
             frameloop={props.visible === false ? "never" : "always"}
-            dpr={[
-              1,
-              Math.min(
-                window.devicePixelRatio,
-                window.innerWidth < 700 ? 1.25 : 1.7,
-              ),
-            ]}
+            dpr={
+              lightweight
+                ? 0.75
+                : [
+                    1,
+                    Math.min(
+                      window.devicePixelRatio,
+                      window.innerWidth < 700 ? 1.25 : 1.7,
+                    ),
+                  ]
+            }
             camera={{ position: [12, 13, 14], fov: 38 }}
             gl={{ antialias: true, powerPreference: "low-power" }}
+            onCreated={({ gl }) => {
+              const context = gl.getContext();
+              const debug = context.getExtension("WEBGL_debug_renderer_info");
+              const renderer = debug
+                ? String(context.getParameter(debug.UNMASKED_RENDERER_WEBGL))
+                : "";
+              if (/swiftshader|llvmpipe|software/i.test(renderer))
+                setLightweight(true);
+            }}
           >
             <Suspense fallback={null}>
               <Scene
@@ -581,6 +600,7 @@ export default function Office(props: OfficeProps) {
                 playing={playing && props.visible !== false}
                 tour={tour && playing}
                 onPresence={setPresence}
+                lightweight={lightweight}
               />
             </Suspense>
           </Canvas>
@@ -612,6 +632,17 @@ export default function Office(props: OfficeProps) {
             </div>
           </div>
           <div className="avatar-playback">
+            <button
+              aria-label={
+                lightweight ? "Gunakan kualitas 3D penuh" : "Gunakan 3D ringan"
+              }
+              aria-pressed={lightweight}
+              className={lightweight ? "on" : ""}
+              onClick={() => setLightweight((value) => !value)}
+            >
+              <Gauge size={14} />
+              <span>3D ringan</span>
+            </button>
             <button
               aria-label={playing ? "Jeda animasi" : "Aktifkan animasi"}
               aria-pressed={!playing}

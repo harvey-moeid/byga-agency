@@ -1,3 +1,11 @@
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
 export async function api<T = Record<string, unknown>>(
   path: string,
   body?: unknown,
@@ -10,10 +18,16 @@ export async function api<T = Record<string, unknown>>(
     body:
       body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
   });
-  const data = await response
-    .json()
-    .catch(() => ({ error: "Backend tidak dapat dihubungi." }));
+  const data = await response.json().catch(() => {
+    throw new ApiError(
+      "Backend tidak mengembalikan respons yang valid.",
+      response.status,
+    );
+  });
   if (!response.ok)
-    throw new Error((data as { error?: string }).error || "Permintaan gagal.");
+    throw new ApiError(
+      (data as { error?: string }).error || "Permintaan gagal.",
+      response.status,
+    );
   return data as T;
 }

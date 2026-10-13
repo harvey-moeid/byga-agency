@@ -2,7 +2,7 @@
 
 Kantor AI 3D interaktif dan pipeline konten TikTok, berdasarkan PRD **AI Agent Dashboard 3D Interaktif — Social Media**.
 
-[PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot desktop](docs/office-avatars.png) · [Screenshot mobile](docs/office-avatars-mobile.png)
+[Status implementasi](docs/STATUS.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot desktop](docs/office-avatars.png) · [Screenshot mobile](docs/office-avatars-mobile.png)
 
 ## Jalankan dashboard
 
@@ -35,9 +35,11 @@ Settings menyimpan key dengan AES-GCM di D1. Master key dan password login harus
 
 Generate caption/prompt → edit → upload video → review → approval → jadwal/publish. Kalender mendukung drag-and-drop dan zona waktu Settings. Persetujuan TikTok mengikat identitas akun, privasi, batas creator, deklarasi brand/AI dan consent.
 
+Edit caption/prompt harus disimpan sebelum review atau approval; perubahan membatalkan pilihan consent yang sedang diisi. Backend memeriksa revisi konten dan mengembalikan HTTP 409 jika versi sudah berubah. Revisi/perubahan jadwal dan pembatalan antrean dilakukan dalam satu transaksi D1; pekerjaan yang sudah diambil publisher atau memiliki hasil remote belum pasti tetap dilindungi.
+
 Kode OAuth, token refresh, upload resmi, antrean publish, retry/backoff dan pengecekan status tersedia. Cron tanpa credential memblokir pekerjaan; tidak memalsukan sukses. Riset resmi, Google Trends RSS, histori analytics, rekomendasi waktu/AI, antrean notifikasi dan retensi data tersedia. API/provider nyata belum diuji dengan credential pengguna.
 
-Kantor membundel lima avatar manusia realistis bertekstur dengan lisensi MIT, animasi mengetik/membaca/presentasi, perpindahan melalui pintu dan koridor, tur kantor, serta kamera yang mengikuti Nova. Model GLB kustom tetap didukung. Lihat [avatar dan gerakan kantor](docs/AVATARS.md). Furnitur masih prosedural dan performa perangkat mobile fisik belum diukur. Integrasi produksi tetap memerlukan credential dan validasi nyata.
+Kantor membundel lima avatar manusia realistis bertekstur dengan lisensi MIT, animasi mengetik/membaca/presentasi, perpindahan melalui pintu dan koridor, tur kantor, serta kamera yang mengikuti Nova. Mode 3D ringan otomatis aktif pada mobile dan renderer software: resolusi render dikurangi dan shadow dinonaktifkan; tombol kualitas dapat mengubahnya. Model GLB kustom tetap didukung. Lihat [avatar dan gerakan kantor](docs/AVATARS.md). Furnitur masih prosedural dan performa perangkat mobile fisik belum diukur. Integrasi produksi tetap memerlukan credential dan validasi nyata.
 
 Lihat [panduan aktivasi API dan OAuth](docs/INTEGRATIONS.md). Anda dapat memasukkan credential dan mengatur aplikasi OAuth nanti melalui Settings. Login Kit dan Research API memerlukan akses produk yang berbeda.
 
@@ -63,15 +65,19 @@ CLOUDFLARE_D1_DATABASE_ID=<database-uuid> npm run deploy
 
 Script menghasilkan konfigurasi deploy di `.wrangler/`, menerapkan migrasi remote, dan deploy tanpa mengubah konfigurasi tracked. Untuk Workers AI gunakan `BYGA_ENABLE_WORKERS_AI=true`. Production cron: due jobs tiap 5 menit, riset dan analytics tiap jam, tren, draft berbasis referensi + retensi pukul 01:00 UTC (08:00 WIB). Frekuensi request/query serta biaya AI/R2 perlu dipantau; kuota gratis tidak diasumsikan tak terbatas.
 
+Terapkan migrasi `0003_job_safety.sql` sebelum menjalankan Worker versi ini, termasuk pada backend lokal (`npm run db:migrate:local`). Cron menyimpan receipt setiap occurrence selama 30 hari untuk mencegah eksekusi ulang event yang sama. Kegagalan dicatat, lalu pekerjaan periodik berikutnya melanjutkan antrean; occurrence yang telah dimulai tidak diulang otomatis. Notifikasi memakai lease per pekerjaan untuk mencegah pengiriman paralel. Pengiriman ulang setelah timeout/crash tetap dapat menghasilkan notifikasi duplikat jika provider sudah menerima pesan.
+
+Binding D1/R2/assets berasal dari tipe hasil Wrangler di `worker/bindings.d.ts`; jalankan `npm run worker:types` setelah mengubah bindings. Binding AI tetap opsional karena diaktifkan saat deploy.
+
 Workflow GitHub memvalidasi PR dan push `main` dengan unit/integration tests, typecheck, build, dan E2E Chromium. Setiap push `main` langsung deploy ke **production** setelah seluruh validasi lulus, tanpa variable `BYGA_DEPLOY_ENABLED`. Deploy juga dapat dijalankan melalui Actions → Validate and deploy → Run workflow pada branch `main`; pemicu manual pada branch lain hanya menjalankan validasi. Deployment production berjalan satu per satu agar migrasi dan deploy tidak tumpang tindih.
 
 Konfigurasi GitHub di repository atau environment `production`:
 
-| Jenis | Nama | Isi |
-| --- | --- | --- |
-| Secret | `CLOUDFLARE_API_TOKEN` | Token untuk deploy Workers, migrasi D1, dan akses binding R2 pada akun tujuan |
-| Variable | `CLOUDFLARE_ACCOUNT_ID` | ID akun Cloudflare production |
-| Variable | `CLOUDFLARE_D1_DATABASE_ID` | UUID database D1 `byga-agency` production |
-| Variable opsional | `BYGA_ENABLE_WORKERS_AI` | `true` untuk mengaktifkan binding Workers AI |
+| Jenis             | Nama                        | Isi                                                                           |
+| ----------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| Secret            | `CLOUDFLARE_API_TOKEN`      | Token untuk deploy Workers, migrasi D1, dan akses binding R2 pada akun tujuan |
+| Variable          | `CLOUDFLARE_ACCOUNT_ID`     | ID akun Cloudflare production                                                 |
+| Variable          | `CLOUDFLARE_D1_DATABASE_ID` | UUID database D1 `byga-agency` production                                     |
+| Variable opsional | `BYGA_ENABLE_WORKERS_AI`    | `true` untuk mengaktifkan binding Workers AI                                  |
 
 Provision D1/R2 dan set Worker secrets `DASHBOARD_PASSWORD` serta `ENCRYPTION_KEY` sebelum deployment pertama. Workflow gagal dengan pesan konfigurasi yang hilang jika token/account/database belum tersedia. Untuk deployment langsung, environment `production` harus mengizinkan branch `main` dan tidak memerlukan approval manual. Script menerapkan migrasi D1 sebelum mengunggah Worker dan frontend. Hubungkan custom domain `agency.muidsoft.com` lewat pengaturan Worker setelah deploy. Menyimpan perubahan workflow secara lokal belum mengaktifkan pipeline; perubahan harus masuk ke `main` GitHub.

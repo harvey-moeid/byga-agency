@@ -115,6 +115,7 @@ export async function accessToken(
   env: Env,
   accountId: string,
   requiredScope?: string,
+  expectedCreatorId?: string,
 ) {
   const row = await env.DB.prepare(
     "SELECT * FROM oauth_connections WHERE account_id=?",
@@ -137,6 +138,10 @@ export async function accessToken(
   let tokens = JSON.parse(
     await decrypt(row.encrypted_tokens, env.ENCRYPTION_KEY),
   ) as Tokens;
+  if (expectedCreatorId && tokens.open_id !== expectedCreatorId)
+    throw new IntegrationUnavailable(
+      "Identitas creator berubah. Hubungkan akun yang disetujui atau approve ulang.",
+    );
   if (row.expires_at > Date.now() + 60000) return tokens.access_token;
   const nonce = crypto.randomUUID();
   const lease = await env.DB.prepare(
@@ -169,6 +174,10 @@ export async function accessToken(
       throw new IntegrationUnavailable(
         "Koneksi akun berubah saat refresh. Muat ulang.",
       );
+    if (requiredScope && !tokens.scope.split(",").includes(requiredScope))
+      throw new IntegrationUnavailable(
+        `Izin ${requiredScope} berubah. Hubungkan ulang akun TikTok.`,
+      );
     return tokens.access_token;
   } catch (error) {
     if (
@@ -193,13 +202,30 @@ export async function accessToken(
       .run();
   }
 }
-export async function creatorInfo(env: Env, accountId: string) {
+export async function creatorInfo(
+  env: Env,
+  accountId: string,
+  expectedCreatorId?: string,
+) {
+  const identity = await env.DB.prepare(
+    "SELECT open_id FROM oauth_connections WHERE account_id=?",
+  )
+    .bind(accountId)
+    .first<{ open_id: string }>();
+  if (
+    !identity ||
+    (expectedCreatorId && identity.open_id !== expectedCreatorId)
+  )
+    throw new IntegrationUnavailable(
+      "Identitas creator berubah atau akun belum terhubung. Muat ulang final approval.",
+    );
   try {
-    return await tiktok<CreatorInfo>(
+    const info = await tiktok<CreatorInfo>(
       "post/publish/creator_info/query/",
-      await accessToken(env, accountId, "video.publish"),
+      await accessToken(env, accountId, "video.publish", identity.open_id),
       {},
     );
+    return { ...info, creatorId: identity.open_id };
   } catch (error) {
     if (error instanceof AmbiguousRequest)
       throw new TikTokError("creator_unavailable", true);
@@ -207,6 +233,7 @@ export async function creatorInfo(env: Env, accountId: string) {
   }
 }
 export const publishOptionsSchema = z.object({
+  creatorId: z.string().min(1).max(200).optional(),
   privacyLevel: z.string().min(1),
   disableComment: z.boolean(),
   disableDuet: z.boolean(),

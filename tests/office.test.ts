@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   approachAngle,
+  advanceWalk,
   avatarClip,
   planRoute,
   roomPositions,
@@ -11,6 +12,24 @@ import {
   type Point,
 } from "../src/officeMotion";
 describe("office navigation", () => {
+  it("finishes the same route at high and low frame rates without walking through walls", () => {
+    const travel = (fps: number) => {
+      let position: Point = [...visitingStations.content],
+        speed = 0,
+        frames = 0;
+      const points = planRoute(position, "research");
+      while (points.length && frames < fps * 20) {
+        const step = advanceWalk(position, points, speed, 1 / fps);
+        position = step.position;
+        speed = step.speed;
+        frames++;
+      }
+      expect(points).toHaveLength(0);
+      expect(position).toEqual(visitingStations.research);
+      return frames / fps;
+    };
+    expect(Math.abs(travel(60) - travel(2))).toBeLessThan(0.5);
+  });
   it("routes every room pair through the matching open doors", () => {
     for (const origin of tourRooms)
       for (const destination of tourRooms) {

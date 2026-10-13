@@ -45,6 +45,7 @@ export function PublishApproval({
         setCreator(c);
         setOptions((o) => ({
           ...o,
+          creatorId: c.creatorId,
           disableComment: c.comment_disabled,
           disableDuet: c.duet_disabled,
           disableStitch: c.stitch_disabled,

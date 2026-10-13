@@ -9,6 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "worker:dev": "wrangler dev",
+    "worker:types": "wrangler types worker/bindings.d.ts --env-interface WorkerBindings --include-runtime false --strict-vars false",
     "db:migrate:local": "wrangler d1 migrations apply byga-agency --local",
     "db:migrate:remote": "wrangler d1 migrations apply byga-agency --remote",
     "deploy": "npm run build && node scripts/deploy.mjs",

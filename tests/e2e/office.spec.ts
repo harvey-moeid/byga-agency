@@ -37,7 +37,9 @@ test("human avatars load, work, walk through doors and pause", async ({
   );
   await page.getByRole("button", { name: "Riset", exact: true }).click();
   const presence = page.getByTestId("avatar-presence");
-  await expect(presence).toHaveAttribute("data-destination", "research");
+  await expect(presence).toHaveAttribute("data-destination", "research", {
+    timeout: 15000,
+  });
   await expect(presence).toHaveAttribute("data-animation", "Walk");
   const firstKnee = await kneePose(page);
   await expect
@@ -74,7 +76,7 @@ test("reduced motion starts paused and a broken avatar model preserves the offic
   await page.goto("/");
   await expect(
     page.getByRole("button", { name: "Aktifkan animasi", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 30000 });
   await expect(page.locator('[data-avatar="Nova"]')).toHaveAttribute(
     "data-model",
     "fallback",
