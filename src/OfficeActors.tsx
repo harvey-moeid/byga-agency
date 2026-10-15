@@ -10,6 +10,7 @@ import { Html, Line } from "@react-three/drei";
 import * as THREE from "three";
 import OfficeAvatar, { type ModelStatus } from "./OfficeAvatar";
 import { rooms, type Room } from "./domain";
+import type { StudioAgent } from "./studio";
 import {
   approachAngle,
   advanceWalk,
@@ -55,6 +56,7 @@ function Beacon({
   onClick,
   portal,
   active,
+  busy = false,
 }: {
   name: string;
   state: WorkAnimation;
@@ -62,6 +64,7 @@ function Beacon({
   onClick: () => void;
   portal?: RefObject<HTMLElement>;
   active: boolean;
+  busy?: boolean;
 }) {
   return (
     <Html portal={portal} position={[0, 1.92, 0]} center zIndexRange={[14, 0]}>
@@ -75,7 +78,13 @@ function Beacon({
       >
         <i className={state === "Walk" ? "walking" : ""} />
         <span>{name}</span>
-        <small>{status === "loading" ? "Memuat…" : workLabels[state]}</small>
+        <small>
+          {busy
+            ? "Menyusun hasil…"
+            : status === "loading"
+              ? "Memuat…"
+              : workLabels[state]}
+        </small>
       </button>
     </Html>
   );
@@ -86,8 +95,12 @@ function Resident({
   selected,
   onAgent,
   portal,
+  agent,
+  busy,
 }: {
   room: Room;
+  agent: StudioAgent;
+  busy?: boolean;
   playing: boolean;
   selected: Room | null;
   onAgent: (room: Room) => void;
@@ -118,9 +131,10 @@ function Resident({
           onStatus={setStatus}
         />
       </group>
-      <Halo color={profile.color} active={selected === room} />
+      <Halo color={agent.color} active={selected === room} />
       <Beacon
-        name={profile.agent}
+        name={agent.name}
+        busy={busy}
         state={work}
         status={status}
         active={selected === room}
@@ -140,8 +154,12 @@ export default function OfficeActors({
   portal,
   traveller,
   onPresence,
+  agents,
+  workingAgent,
 }: {
   selected: Room | null;
+  agents: StudioAgent[];
+  workingAgent?: Room;
   activeRoom: Room;
   avatarUrl?: string;
   playing: boolean;
@@ -246,6 +264,8 @@ export default function OfficeActors({
           <Resident
             key={r.id}
             room={r.id}
+            agent={agents.find((a) => a.id === r.id)!}
+            busy={workingAgent === r.id}
             playing={playing}
             selected={selected}
             onAgent={onAgent}
@@ -281,9 +301,10 @@ export default function OfficeActors({
             onStatus={onStatus}
           />
         </group>
-        <Halo color="#a491c7" active />
+        <Halo color={agents.find((a) => a.id === "content")!.color} active />
         <Beacon
-          name="Nova"
+          name={agents.find((a) => a.id === "content")!.name}
+          busy={workingAgent === "content"}
           state={state}
           status={model}
           active

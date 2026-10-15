@@ -2,7 +2,7 @@
 
 Kantor AI 3D interaktif dan pipeline konten TikTok, berdasarkan PRD **AI Agent Dashboard 3D Interaktif — Social Media**.
 
-[Status implementasi](docs/STATUS.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot desktop](docs/office-avatars.png) · [Screenshot mobile](docs/office-avatars-mobile.png)
+[Status implementasi](docs/STATUS.md) · [Panduan studio kreatif](docs/STUDIO.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot studio](docs/studio-office.png) · [Chat desktop](docs/studio-chat-desktop.png) · [Chat mobile](docs/studio-chat-mobile.png)
 
 ## Jalankan dashboard
 
@@ -27,9 +27,25 @@ npm run worker:dev -- --port 8787
 npm run dev -- --port 5173
 ```
 
-Pilih Settings → **Masuk backend live**. Gunakan alamat host yang sesuai APP_URL; Vite mem-proxy `/api` ke Worker lokal. Backend live dimulai dengan data kosong. Tambahkan akun, isi API key OpenRouter melalui Settings, pilih model, lalu generate caption dan prompt video. Workers AI memerlukan binding `AI` dan model `@cf/...`; tambahkan `"ai":{"binding":"AI"}` pada konfigurasi lokal atau gunakan `BYGA_ENABLE_WORKERS_AI=true` saat deploy. Tidak ada generator video otomatis.
+Pilih Settings → **Masuk backend live**. Gunakan alamat host yang sesuai APP_URL; Vite mem-proxy `/api` ke Worker lokal. Backend live dimulai dengan data kosong. Tambahkan akun, pilih provider AI (OpenRouter, Cloudflare Workers AI, Gemini, NVIDIA NIM, Cohere, Hugging Face, Mistral, atau Groq), isi API key/token provider melalui Settings, pilih model, lalu generate caption dan prompt video. Model default terisi saat provider diganti dan tetap dapat diedit; lihat [daftar model dan aktivasi AI](docs/INTEGRATIONS.md#provider-ai). Workers AI memerlukan binding `AI` dan model `@cf/...`; tambahkan `"ai":{"binding":"AI"}` pada konfigurasi lokal atau gunakan `BYGA_ENABLE_WORKERS_AI=true` saat deploy. Tidak ada generator video otomatis.
 
 Settings menyimpan key dengan AES-GCM di D1. Master key dan password login harus tetap menjadi **Worker secrets**; master key tidak dapat disimpan di database yang sama dengan ciphertext. Mengganti master key tanpa migrasi membuat key sebelumnya tidak dapat dibaca. Nilai key tidak dikembalikan oleh API. Sesi menggunakan cookie HttpOnly/SameSite, kadaluarsa 24 jam, login dibatasi 10 percobaan per 15 menit, mutasi memeriksa Origin. Proxy/host publik harus menggunakan HTTPS. Demo bukan sistem login untuk produksi.
+
+## Kantor kreatif dan proyek bersama
+
+Beranda menampilkan kantor 3D hangat dengan kayu, tanaman, area brainstorming dan produksi. Klik agen untuk chat bebas atau tindakan terpandu; panel ada di kanan pada desktop dan memenuhi layar mobile. Nama, peran, warna serta instruksi agen dapat diedit dari preset atau custom di Settings.
+
+Mulai **Proyek baru**, isi brief yang tersimpan otomatis, lalu tinjau dan setujui setiap tahap: **brief → cerita → prompt gambar → prompt video → review → draft final**. Setiap agen punya chat sendiri dan memakai konteks bersama yang disetujui. Revisi per adegan mempertahankan hasil lain, menandai prompt terdampak untuk ditinjau ulang, dan menyimpan riwayat versi. Profil karakter cerita mendukung penampilan, pakaian dan referensi PNG/JPG/WebP. Proyek/riwayat dapat diekspor sebagai JSON.
+
+Jalankan `npm run db:migrate:local` untuk menambahkan tabel studio dari `0004_creative_studio.sql` pada backend lokal. Deployment menjalankan migrasi sebelum deploy. Lihat [panduan studio, revisi dan API](docs/STUDIO.md).
+
+## Generator prompt UGC cerita
+
+Buka **Prompt UGC** di sidebar. Pilih akun draft, tulis ide cerita, produk/brand opsional, karakter, audiens dan gaya. Pilih 3–6 adegan dengan durasi 5, 8 atau 10 detik per adegan. Backend live menggunakan provider AI di Settings; demo membuat contoh template tanpa panggilan AI.
+
+Storyboard memuat hook, alur cerita, acuan karakter/produk, negative prompt, narasi Indonesia serta prompt **text-to-image** dan **image-to-video** berbahasa Inggris per adegan. Prompt gambar menyertakan acuan karakter yang sama; prompt video melanjutkan gambar adegan tersebut sebagai frame awal. Salin setiap prompt/narasi, salin seluruh naskah, atau unduh `.txt`. Buat gambar dan video di tool eksternal, lalu rangkai dan tambahkan voice-over/subtitle saat editing.
+
+Hasil tersimpan sebagai draft di Content library dan daftar Cerita tersimpan. Buka kembali untuk menyalin storyboard, mengedit caption/catatan produksi, atau pilih **Generate versi baru** untuk mengisi ulang brief. Generasi ulang membuat draft baru. Storyboard per adegan tetap merupakan hasil generator; edit lanjutan dapat dilakukan setelah diekspor. Tidak ada pembuatan gambar/video atau audio otomatis. Data storyboard memakai JSON konten yang ada tanpa migrasi baru.
 
 ## Pipeline dan integrasi
 
@@ -65,7 +81,7 @@ CLOUDFLARE_D1_DATABASE_ID=<database-uuid> npm run deploy
 
 Script menghasilkan konfigurasi deploy di `.wrangler/`, menerapkan migrasi remote, dan deploy tanpa mengubah konfigurasi tracked. Untuk Workers AI gunakan `BYGA_ENABLE_WORKERS_AI=true`. Production cron: due jobs tiap 5 menit, riset dan analytics tiap jam, tren, draft berbasis referensi + retensi pukul 01:00 UTC (08:00 WIB). Frekuensi request/query serta biaya AI/R2 perlu dipantau; kuota gratis tidak diasumsikan tak terbatas.
 
-Terapkan migrasi `0003_job_safety.sql` sebelum menjalankan Worker versi ini, termasuk pada backend lokal (`npm run db:migrate:local`). Cron menyimpan receipt setiap occurrence selama 30 hari untuk mencegah eksekusi ulang event yang sama. Kegagalan dicatat, lalu pekerjaan periodik berikutnya melanjutkan antrean; occurrence yang telah dimulai tidak diulang otomatis. Notifikasi memakai lease per pekerjaan untuk mencegah pengiriman paralel. Pengiriman ulang setelah timeout/crash tetap dapat menghasilkan notifikasi duplikat jika provider sudah menerima pesan.
+Terapkan seluruh migrasi hingga `0004_creative_studio.sql` sebelum menjalankan Worker versi ini, termasuk pada backend lokal (`npm run db:migrate:local`). Cron menyimpan receipt setiap occurrence selama 30 hari untuk mencegah eksekusi ulang event yang sama. Kegagalan dicatat, lalu pekerjaan periodik berikutnya melanjutkan antrean; occurrence yang telah dimulai tidak diulang otomatis. Notifikasi memakai lease per pekerjaan untuk mencegah pengiriman paralel. Pengiriman ulang setelah timeout/crash tetap dapat menghasilkan notifikasi duplikat jika provider sudah menerima pesan.
 
 Binding D1/R2/assets berasal dari tipe hasil Wrangler di `worker/bindings.d.ts`; jalankan `npm run worker:types` setelah mengubah bindings. Binding AI tetap opsional karena diaktifkan saat deploy.
 

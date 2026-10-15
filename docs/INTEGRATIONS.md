@@ -23,9 +23,38 @@ Research API adalah produk terpisah dengan persyaratan kelayakan TikTok. Login K
 
 Cron memeriksa maksimal lima referensi per jam, bergiliran. Pagination dan jendela tanggal tersimpan. Data API riset dapat tertunda dari platform. Tren hashtag berasal dari sampel akun yang dipantau, bukan klaim seluruh TikTok. Google Trends RSS Indonesia opsional disinkronkan harian. Hasil riset dapat dipilih sebagai referensi generate caption/prompt.
 
-## AI, analytics, notifikasi, dan aset
+## Provider AI
 
-OpenRouter memerlukan key di Settings. Workers AI memerlukan binding `AI` serta model yang tersedia. Analytics memakai scope `video.list`, mengambil post dashboard yang memiliki video ID, menyimpan histori views/likes. Rekomendasi waktu memerlukan sedikitnya tiga post dengan analytics yang benar-benar tersinkron. Ringkasan dan ide AI memakai provider yang dipilih; tidak mengklaim waktu optimal sebelum sampel tersedia.
+Delapan provider tersedia di Settings → AI & otomasi. Pilih provider, isi credential yang sesuai di API key & notifikasi, lalu simpan. Penggantian provider mengisi model default; kolom Model dapat diedit sesuai model yang tersedia untuk akun Anda. Semua fitur teks (caption, prompt video, draft otomatis, ringkasan/rekomendasi analytics) menggunakan provider yang dipilih. Tidak ada generator video otomatis atau fallback ke provider lain.
+
+| Provider              | Model default                       | Credential di Settings                                    |
+| --------------------- | ----------------------------------- | --------------------------------------------------------- |
+| OpenRouter            | `openai/gpt-4o-mini`                | OpenRouter API key                                        |
+| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct`    | Binding `AI`, tanpa key di form                           |
+| Gemini                | `gemini-2.5-flash-lite`             | Gemini API key (Google AI Studio)                         |
+| NVIDIA NIM            | `meta/llama-3.1-8b-instruct`        | NVIDIA NIM API key (NVIDIA API Catalog hosted API)        |
+| Cohere                | `command-a-03-2025`                 | Cohere API key                                            |
+| Hugging Face          | `meta-llama/Llama-3.3-70B-Instruct` | Hugging Face access token dengan izin Inference Providers |
+| Mistral               | `mistral-small-latest`              | Mistral API key                                           |
+| Groq                  | `llama-3.3-70b-versatile`           | Groq API key                                              |
+
+Credential disimpan terenkripsi di D1 dan tidak dikembalikan ke browser; form kosong mempertahankan credential tersimpan. Mode demo tidak menyimpan key dan tidak memanggil provider. Tidak perlu migrasi database baru. Cloudflare Workers AI memerlukan binding `AI` (opsi deploy `BYGA_ENABLE_WORKERS_AI=true`). NVIDIA NIM menggunakan API hosted, bukan endpoint NIM self-hosted.
+
+Gemini menggunakan `generateContent`, Cohere menggunakan Chat API v2, dan provider lainnya menggunakan endpoint chat completions masing-masing. Hugging Face menggunakan Inference Providers router; ketersediaan model/provider, izin model gated, kuota, dan billing mengikuti akun pengguna. NIM dan Hugging Face mengikuti instruksi JSON tanpa memaksakan parameter JSON mode yang dukungannya bergantung pada model; hasil generate tetap divalidasi sebelum draft disimpan. Request dibatasi 60 detik, respons HTTP maksimal 1 MB, dan kegagalan provider ditampilkan tanpa menyalin isi respons error atau credential.
+
+Referensi kontrak API: [Gemini](https://ai.google.dev/api/generate-content), [NVIDIA NIM](https://docs.api.nvidia.com/nim/reference/llm-apis), [Cohere](https://docs.cohere.com/reference/chat), [Hugging Face](https://huggingface.co/docs/inference-providers/tasks/chat-completion), [Mistral](https://docs.mistral.ai/api/endpoint/chat), [Groq](https://console.groq.com/docs/openai). Tes menggunakan respons simulasi; koneksi nyata memerlukan credential pengguna dan belum diverifikasi.
+
+## Generator UGC cerita
+
+UI **Prompt UGC** memanggil `POST /api/contents/generate-ugc` dengan `{ accountId, brief: { idea, product, character, audience, tone, sceneCount, sceneDuration } }`. Tone: `relatable`, `emotional`, `humor`, atau `educational`. Jumlah adegan 3–6; durasi per adegan 5, 8, atau 10 detik. Endpoint memerlukan sesi dan Origin yang valid, memvalidasi brief dan akun sebelum memanggil AI.
+
+Generator memakai `aiText` dan credential provider yang dipilih. Respons JSON wajib berisi judul, caption, hook, synopsis, characterLock, negativePrompt dan tepat jumlah adegan yang diminta; setiap adegan wajib memiliki judul, narasi, prompt gambar dan prompt gerakan. Respons gagal/tidak lengkap tidak membuat draft. Budget keluaran hingga 6.000 token, timeout/ukuran respons mengikuti adapter AI. Bahasa narasi Indonesia dan prompt visual Inggris diarahkan lewat instruksi model; kualitas/ketepatan bahasa dan durasi narasi tetap perlu direview.
+
+Storyboard tersimpan pada properti `ugc` di JSON konten; `prompt` menyimpan catatan produksi untuk alur edit lama. Edit caption/catatan produksi tidak menghapus storyboard. Tidak perlu migrasi D1, layanan gambar/video baru, atau credential tambahan. Batasan provider, billing, serta keberhasilan API nyata tetap mengikuti akun pengguna. Hasil produksi gambar/video dari prompt belum diuji di tool eksternal.
+
+## Analytics, notifikasi, dan aset
+
+Analytics memakai scope `video.list`, mengambil post dashboard yang memiliki video ID, menyimpan histori views/likes. Rekomendasi waktu memerlukan sedikitnya tiga post dengan analytics yang benar-benar tersinkron. Ringkasan dan ide AI memakai provider yang dipilih; tidak mengklaim waktu optimal sebelum sampel tersedia.
 
 Notifikasi Discord/Telegram dikonfigurasi di Settings, credential terenkripsi. Pengiriman diantrekan, deduplikasi event gagal publish, backoff, maksimal lima percobaan. Tidak ada notifikasi nyata dalam tes simulasi.
 
@@ -37,4 +66,8 @@ Avatar GLB embedded maksimal 10 MB dapat diupload ke File Manager dan dipilih di
 
 Provision D1/R2, isi Worker secrets `DASHBOARD_PASSWORD` dan `ENCRYPTION_KEY`, konfigurasi CI seperti README. Terapkan seluruh migrasi, deploy, dan hubungkan domain. Master encryption key harus dipertahankan; menggantinya memerlukan migrasi ciphertext. Kode dan tes lokal tidak membuktikan app TikTok disetujui atau deployment produksi sudah berhasil.
 
-Migrasi terbaru `0003_job_safety.sql` menambahkan receipt cron dan lease notifikasi. Satu trigger `*/5 * * * *` mendispatch pekerjaan per jam dan harian menggunakan `scheduledTime`, termasuk jika delivery terlambat. Laporan harian disusun setelah pemrosesan riset/analytics per jam. Receipt yang sudah dimulai tidak dieksekusi ulang untuk occurrence yang sama; receipt disimpan 30 hari. Kegagalan tercatat pada log Worker/activity, dan antrean dapat diproses pada occurrence berikutnya.
+Migrasi `0003_job_safety.sql` menambahkan receipt cron dan lease notifikasi. Satu trigger `*/5 * * * *` mendispatch pekerjaan per jam dan harian menggunakan `scheduledTime`, termasuk jika delivery terlambat. Laporan harian disusun setelah pemrosesan riset/analytics per jam. Receipt yang sudah dimulai tidak dieksekusi ulang untuk occurrence yang sama; receipt disimpan 30 hari. Kegagalan tercatat pada log Worker/activity, dan antrean dapat diproses pada occurrence berikutnya.
+
+## Studio kreatif dan percakapan agen
+
+Terapkan `0004_creative_studio.sql` untuk proyek, profil agen dan karakter cerita. Chat/tahap memakai provider AI yang dipilih di Settings, dengan hasil terstruktur yang divalidasi dan persetujuan eksplisit sebelum mengubah konteks approved. Gambar referensi PNG/JPG/WebP disimpan ke R2 melalui endpoint file yang sama, maksimal 5 MB. Panduan penggunaan, endpoint, invalidasi revisi, pembatalan dan batas penyimpanan ada di [STUDIO.md](STUDIO.md).

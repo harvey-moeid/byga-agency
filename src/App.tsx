@@ -42,7 +42,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import {
-  rooms,
+  rooms as baseRooms,
   statusNames,
   makeDemo,
   demoDraft,
@@ -56,6 +56,18 @@ import {
 } from "./domain";
 import { saveVideo, getVideo, deleteVideo } from "./storage";
 import { api, ApiError } from "./api";
+import { aiProviderIds, aiProviders, type AIProvider } from "./aiProviders";
+import UGCGenerator, { UGCStoryboard } from "./UGCGenerator";
+import { useStudio } from "./useStudio";
+import {
+  AgentPanel,
+  AgentSettings,
+  NewProjectDialog,
+  ProjectsPage,
+  StudioProjectBar,
+  StudioError,
+} from "./StudioUI";
+import { demoUGCDraft, type UGCBrief } from "./ugc";
 import {
   PublishApproval,
   PublishQueue,
@@ -70,6 +82,8 @@ type Page =
   | "office"
   | "research"
   | "content"
+  | "ugc"
+  | "projects"
   | "schedule"
   | "publish"
   | "analytics"
@@ -77,8 +91,10 @@ type Page =
   | "settings";
 const nav = [
   { id: "office", title: "Workspace", icon: LayoutDashboard },
+  { id: "projects", title: "Proyek UGC", icon: Compass },
   { id: "research", title: "Riset & inspirasi", icon: Compass },
   { id: "content", title: "Content library", icon: Layers3 },
+  { id: "ugc", title: "Prompt UGC", icon: Sparkles },
   { id: "schedule", title: "Kalender", icon: CalendarDays },
   { id: "publish", title: "Publishing", icon: Send },
   { id: "analytics", title: "Analytics", icon: BarChart3 },
@@ -227,6 +243,25 @@ export default function App() {
   >(null);
   const [detail, setDetail] = useState<Content | null>(null);
   const [toast, setToast] = useState("");
+  const [agentPanel, setAgentPanel] = useState<Room | null>(null);
+  const [agentScene, setAgentScene] = useState<string>();
+  const [newProject, setNewProject] = useState(false);
+  const studio = useStudio({
+    live,
+    enabled: !live || loggedIn,
+    unauthorized: () => setLoggedIn(false),
+    onContent: async (item) => {
+      if (live) await refresh();
+      else setWorkspace((w) => ({ ...w, contents: [item, ...w.contents] }));
+      setToast(
+        "Draft final disimpan ke Content library. Belum dipublikasikan.",
+      );
+    },
+  });
+  const rooms = baseRooms.map((room) => {
+    const agent = studio.agents.find((a) => a.id === room.id)!;
+    return { ...room, agent: agent.name, role: agent.role, color: agent.color };
+  });
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const workspaceRequest = useRef(0);
@@ -238,6 +273,11 @@ export default function App() {
     workspace.accounts[0]?.id || "",
   );
   const [brief, setBrief] = useState("");
+  const [ugcSeed, setUGCSeed] = useState<{
+    id: string;
+    accountId: string;
+    brief: UGCBrief;
+  }>();
   const [scheduleDate, setScheduleDate] = useState("");
   const [publishOptions, setPublishOptions] = useState<PublishOptions>();
   const [researchIds, setResearchIds] = useState<string[]>([]);
@@ -384,6 +424,31 @@ export default function App() {
       );
     });
   }
+  async function generateUGC(accountId: string, brief: UGCBrief) {
+    await task(async () => {
+      if (!workspace.accounts.some((a) => a.id === accountId))
+        throw new Error("Tambahkan akun terlebih dahulu.");
+      const item = live
+        ? await api<Content>("/contents/generate-ugc", { accountId, brief })
+        : demoUGCDraft(accountId, brief);
+      if (live) await refresh();
+      else
+        setWorkspace((w) => ({
+          ...w,
+          contents: [item, ...w.contents],
+          activity: [
+            log("content", "Storyboard UGC demo dibuat"),
+            ...w.activity,
+          ].slice(0, 100),
+        }));
+      setDetail(item);
+      setToast(
+        live
+          ? "Storyboard UGC tersimpan sebagai draft."
+          : "Storyboard demo tersimpan. Ini contoh template, bukan hasil model AI.",
+      );
+    });
+  }
   async function transition(
     item: Content,
     action: "approve" | "schedule" | "review" | "publish" | "revise",
@@ -430,7 +495,44 @@ export default function App() {
       setToast("Perubahan tersimpan.");
     });
   }
+  async function uploadReference(file: File): Promise<string | undefined> {
+    let id: string | undefined;
+    await task(async () => {
+      if (
+        !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
+        file.size > 5 * 1024 * 1024
+      )
+        throw new Error("Pilih PNG, JPG, atau WebP maksimal 5 MB.");
+      if (live) {
+        const data = new FormData();
+        data.append("file", file);
+        id = (await api<{ id: string }>("/files", data)).id;
+        await refresh();
+      } else {
+        id = crypto.randomUUID();
+        await saveVideo(id, file);
+        const asset = {
+          id,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          createdAt: new Date().toISOString(),
+        };
+        setWorkspace((w) => ({ ...w, assets: [asset, ...w.assets] }));
+      }
+      setToast("Gambar referensi tersimpan.");
+    });
+    return id;
+  }
   async function upload(file: File, item?: Content) {
+    if (file.type.startsWith("image/")) {
+      if (item) {
+        setToast("Konten TikTok memerlukan video, bukan gambar.");
+        return;
+      }
+      await uploadReference(file);
+      return;
+    }
     await task(async () => {
       if (
         item &&
@@ -642,6 +744,7 @@ export default function App() {
   };
   const pickRoom = (room: Room) => {
     setSelected(room);
+    setAgentPanel(room);
   };
   const showDetail = (item: Content) => setDetail(item);
   const visibleContents = workspace.contents.filter(
@@ -820,7 +923,7 @@ export default function App() {
       </div>
     );
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${agentPanel ? "studio-chat-open" : ""}`}>
       <aside className={`sidebar ${menu ? "mobile-open" : ""}`}>
         <button
           className="brand"
@@ -866,7 +969,7 @@ export default function App() {
             <button
               onClick={() => {
                 setSelected("content");
-                setModal("agent");
+                setAgentPanel("content");
               }}
             >
               Kenali tim Anda <ArrowUpRight size={14} />
@@ -1010,6 +1113,12 @@ export default function App() {
                   }
                 />
               </div>
+              <StudioProjectBar
+                studio={studio}
+                onNew={() => setNewProject(true)}
+                onProjects={() => navigate("projects")}
+              />
+              <StudioError studio={studio} />
               <div className="office-layout">
                 <section className="office-card">
                   <div className="section-head">
@@ -1043,17 +1152,23 @@ export default function App() {
                     >
                       <Office
                         selected={selected}
+                        agents={studio.agents}
+                        workingAgent={studio.working?.agentId}
                         onSelect={pickRoom}
                         onAgent={(room) => {
                           setSelected(room);
-                          setModal("agent");
+                          setAgentPanel(room);
                         }}
                         focus={focus}
                         reset={reset}
                         activeRoom={workspace.activity[0]?.room || "content"}
                         avatarUrl={avatarUrl}
                         demo={!live}
-                        visible={!modal && !detail}
+                        visible={
+                          !modal &&
+                          !detail &&
+                          (!agentPanel || window.innerWidth > 700)
+                        }
                         metrics={workspace.accounts.map((a) =>
                           workspace.contents
                             .filter((c) => c.accountId === a.id)
@@ -1065,7 +1180,7 @@ export default function App() {
                       <span className="live-dot" /> TEAM WORKSPACE<span>•</span>
                       5 ruangan
                     </div>
-                    {selected && (
+                    {selected && !agentPanel && (
                       <div className="room-popover">
                         <button
                           className="icon-button"
@@ -1149,7 +1264,7 @@ export default function App() {
                         key={r.id}
                         onClick={() => {
                           setSelected(r.id);
-                          setModal("agent");
+                          setAgentPanel(r.id);
                         }}
                       >
                         <span
@@ -1157,7 +1272,7 @@ export default function App() {
                           style={{ background: r.color }}
                         >
                           <img
-                            src={`/avatars/${r.agent.toLowerCase()}.png`}
+                            src={`/avatars/${baseRooms.find((b) => b.id === r.id)!.agent.toLowerCase()}.png`}
                             alt=""
                             loading="lazy"
                           />
@@ -1166,13 +1281,9 @@ export default function App() {
                           <strong>
                             {r.agent}
                             <small>
-                              {live
-                                ? "Visual"
-                                : i === 1
-                                  ? "Creating"
-                                  : i === 0
-                                    ? "Researching"
-                                    : "Ready"}
+                              {studio.working?.agentId === r.id
+                                ? "Bekerja…"
+                                : "Siap berdiskusi"}
                             </small>
                           </strong>
                           <span>{r.role}</span>
@@ -1296,6 +1407,40 @@ export default function App() {
             </>
           )}
           {page === "content" && contentPage}
+          {page === "projects" && (
+            <ProjectsPage
+              studio={studio}
+              accounts={workspace.accounts}
+              assets={workspace.assets}
+              live={live}
+              onNew={() => setNewProject(true)}
+              onAgent={(id, sceneId) => {
+                setAgentScene(sceneId);
+                setSelected(id);
+                setAgentPanel(id);
+              }}
+              onUpload={uploadReference}
+              onContent={(id) => {
+                const item = workspace.contents.find((c) => c.id === id);
+                if (item) setDetail(item);
+                else setToast("Draft tidak ditemukan. Muat ulang workspace.");
+              }}
+            />
+          )}
+          {page === "ugc" && (
+            <UGCGenerator
+              key={`${live ? "live" : "demo"}:${ugcSeed?.id || "new"}`}
+              accounts={workspace.accounts}
+              contents={workspace.contents}
+              live={live}
+              busy={busy}
+              onGenerate={generateUGC}
+              onOpen={showDetail}
+              onSettings={() => navigate("settings")}
+              initialBrief={ugcSeed?.brief}
+              initialAccountId={ugcSeed?.accountId}
+            />
+          )}
           {page === "research" && (
             <>
               <ResearchResults {...integrations} onUse={useResearch} />
@@ -1801,16 +1946,16 @@ export default function App() {
                     {live
                       ? "Penyimpanan video R2"
                       : "Video tersimpan lokal di IndexedDB browser"}{" "}
-                    · video maksimal 50 MB, GLB 10 MB
+                    · video maksimal 50 MB, GLB 10 MB, gambar 5 MB
                   </p>
                 </div>
                 <label className="button primary">
                   <Upload size={16} />
-                  Upload video
+                  Upload file
                   <input
                     type="file"
                     hidden
-                    accept="video/mp4,video/webm,.glb"
+                    accept="video/mp4,video/webm,.glb,image/png,image/jpeg,image/webp"
                     disabled={busy}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -1862,6 +2007,27 @@ export default function App() {
                           if (workspace.contents.some((c) => c.fileId === a.id))
                             throw new Error(
                               "File masih digunakan konten dan tidak dapat dihapus.",
+                            );
+                          if (
+                            studio.characters.some(
+                              (c) => c.referenceAssetId === a.id,
+                            ) ||
+                            studio.projects.some(
+                              (p) =>
+                                p.briefDraft.characterProfile
+                                  ?.referenceAssetId === a.id ||
+                                p.brief?.data.characterProfile
+                                  ?.referenceAssetId === a.id ||
+                                p.history.some(
+                                  (h) =>
+                                    h.payload.stage === "brief" &&
+                                    h.payload.data.characterProfile
+                                      ?.referenceAssetId === a.id,
+                                ),
+                            )
+                          )
+                            throw new Error(
+                              "Gambar masih digunakan profil karakter atau riwayat proyek.",
                             );
                           if (!confirm(`Hapus file ${a.name} secara permanen?`))
                             return;
@@ -1931,6 +2097,7 @@ export default function App() {
                   {live ? "Keluar sesi live" : "Masuk backend live"}
                 </button>
               </section>
+              <AgentSettings studio={studio} />
               <form
                 className="panel settings-form"
                 onSubmit={(e) => {
@@ -1969,17 +2136,18 @@ export default function App() {
                       onChange={(e) =>
                         setFormSettings((s) => ({
                           ...s,
-                          provider: e.target.value as
-                            "openrouter" | "cloudflare",
+                          provider: e.target.value as AIProvider,
                           model:
-                            e.target.value === "cloudflare"
-                              ? "@cf/meta/llama-3.1-8b-instruct"
-                              : "openai/gpt-4o-mini",
+                            aiProviders[e.target.value as AIProvider]
+                              .defaultModel,
                         }))
                       }
                     >
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="cloudflare">Cloudflare Workers AI</option>
+                      {aiProviderIds.map((id) => (
+                        <option key={id} value={id}>
+                          {aiProviders[id].label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label>
@@ -2139,7 +2307,17 @@ export default function App() {
                 </p>
                 <div className="form-grid">
                   {[
-                    ["openrouterKey", "OpenRouter API key"],
+                    ...aiProviderIds.flatMap((id) => {
+                      const provider = aiProviders[id];
+                      return provider.credential
+                        ? [
+                            [
+                              provider.credential,
+                              `${provider.label} ${id === "huggingface" ? "access token" : "API key"}`,
+                            ],
+                          ]
+                        : [];
+                    }),
                     ["tiktokClientKey", "TikTok Login Kit client key"],
                     ["tiktokClientSecret", "TikTok Login Kit client secret"],
                     ["researchClientKey", "TikTok Research client key"],
@@ -2411,49 +2589,43 @@ export default function App() {
           </form>
         </Modal>
       )}
-      {modal === "agent" && (
-        <Modal
-          title={`${rooms.find((r) => r.id === selected)?.agent || "Nova"} · AI teammate`}
-          onClose={() => setModal(null)}
-        >
-          <div className="agent-detail">
-            <span
-              className="big-avatar"
-              style={{
-                background: rooms.find((r) => r.id === selected)?.color,
-              }}
-            >
-              <Sparkles size={34} />
-            </span>
-            <h3>
-              {rooms.find((r) => r.id === selected)?.role || "Content creator"}
-            </h3>
-            <p className="muted">
-              {live
-                ? "Agen adalah representasi visual pekerjaan backend."
-                : "Karakter dan aktivitas kerja merupakan simulasi demo."}
-            </p>
-          </div>
-          {workspace.activity
-            .filter((a) => a.room === (selected || "content"))
-            .slice(0, 8)
-            .map((a) => (
-              <div className="log-bubble" key={a.id}>
-                <p>{a.message}</p>
-                <small>{stamp(a.time)}</small>
-              </div>
-            ))}
-          <button
-            className="button primary full"
-            onClick={() => {
-              setModal(null);
-              navigate(selected || "content");
-            }}
-          >
-            Buka ruang kerja
-            <ArrowUpRight size={17} />
-          </button>
-        </Modal>
+      {agentPanel && (
+        <AgentPanel
+          agentId={agentPanel}
+          initialSceneId={agentScene}
+          studio={studio}
+          live={live}
+          onClose={() => {
+            setAgentPanel(null);
+            setAgentScene(undefined);
+          }}
+          onAgent={(id) => {
+            setAgentPanel(id);
+            setSelected(id);
+          }}
+          onNew={() => setNewProject(true)}
+          onProjects={() => navigate("projects")}
+          onOpenRoom={() => {
+            navigate(agentPanel);
+            setAgentPanel(null);
+          }}
+        />
+      )}
+      {newProject && (
+        <NewProjectDialog
+          accounts={workspace.accounts}
+          studio={studio}
+          onClose={() => setNewProject(false)}
+          onCreated={() => {
+            navigate("projects");
+            setAgentPanel("research");
+          }}
+          onSettings={() => {
+            setNewProject(false);
+            setAgentPanel(null);
+            navigate("settings");
+          }}
+        />
       )}
       {modal === "notifications" && (
         <Modal title="Activity log" onClose={() => setModal(null)}>
@@ -2479,6 +2651,23 @@ export default function App() {
             </span>
             <span>{account(detail.accountId)?.handle}</span>
             <small>{stamp(detail.createdAt)}</small>
+            {detail.studioProjectId && (
+              <button
+                className="text-button"
+                onClick={() => {
+                  void studio
+                    .select(detail.studioProjectId!)
+                    .then((project) => {
+                      if (project) {
+                        setDetail(null);
+                        navigate("projects");
+                      }
+                    });
+                }}
+              >
+                Buka proyek sumber <ArrowUpRight size={13} />
+              </button>
+            )}
           </div>
           <div className="detail-grid">
             <div>
@@ -2535,10 +2724,10 @@ export default function App() {
                 />
               </label>
               <label htmlFor="content-prompt">
-                Prompt video
+                {detail.ugc ? "Catatan produksi" : "Prompt video"}
                 <textarea
                   id="content-prompt"
-                  aria-label="Prompt video"
+                  aria-label={detail.ugc ? "Catatan produksi" : "Prompt video"}
                   rows={5}
                   maxLength={8000}
                   readOnly={!["draft", "review"].includes(detail.status)}
@@ -2599,6 +2788,16 @@ export default function App() {
                   <button
                     className="text-button"
                     onClick={() => {
+                      if (detail.ugc) {
+                        setUGCSeed({
+                          id: crypto.randomUUID(),
+                          accountId: detail.accountId,
+                          brief: detail.ugc.brief,
+                        });
+                        setDetail(null);
+                        navigate("ugc");
+                        return;
+                      }
                       setBrief(detail.title);
                       setDraftAccount(detail.accountId);
                       setDetail(null);
@@ -2756,6 +2955,18 @@ export default function App() {
               </p>
             </div>
           </div>
+          {detail.ugc && (
+            <UGCStoryboard
+              item={{ ...detail, caption: editCaption, prompt: editPrompt }}
+              copy={(text) => {
+                void task(async () => {
+                  await navigator.clipboard.writeText(text);
+                  setToast("Teks storyboard disalin.");
+                });
+              }}
+              notify={setToast}
+            />
+          )}
         </Modal>
       )}
       {toast && (

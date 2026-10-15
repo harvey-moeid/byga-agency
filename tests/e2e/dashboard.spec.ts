@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { makeDemo } from "../../src/domain";
+import { defaultAgents } from "../../src/studio";
 test("demo creates a draft, preserves edits, requires a video, then schedules approval", async ({
   page,
 }) => {
@@ -122,26 +123,20 @@ test("mobile layout has no horizontal overflow and navigation works", async ({
     ),
   ).toBe(true);
 });
-test("room controls open the right workspace and agents show their logs", async ({
+test("room controls open agent conversations and can still open the workspace", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(page.locator(".room-label")).toHaveCount(5);
   await page.getByRole("button", { name: "Riset", exact: true }).click();
-  await expect(
-    page.locator(".room-popover").getByRole("heading", { name: "Ruang Riset" }),
-  ).toBeVisible();
-  await page
-    .locator(".room-popover")
-    .getByRole("button", { name: "Buka ruang" })
-    .click();
+  const panel = page.getByRole("dialog", { name: "Aria · AI teammate" });
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: "Buka ruang kerja" }).click();
   await expect(
     page.getByRole("heading", { name: "Riset & inspirasi." }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Workspace", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Nova Creating Content creator" })
-    .click();
+  await page.locator(".team-member").filter({ hasText: "Nova" }).click();
   await expect(
     page.getByRole("dialog", { name: "Nova · AI teammate" }),
   ).toBeVisible();
@@ -236,6 +231,10 @@ test("live login loads the saved settings and an expired session returns to logi
   let authenticated = false;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/studio")
+      return route.fulfill({
+        json: { agents: defaultAgents, characters: [], projects: [] },
+      });
     if (path === "/api/login") {
       authenticated = true;
       return route.fulfill({ json: { ok: true } });
@@ -329,6 +328,10 @@ test("saving a new live caption clears the consent given for the previous revisi
   let revisionReceived: number | undefined;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/studio")
+      return route.fulfill({
+        json: { agents: defaultAgents, characters: [], projects: [] },
+      });
     if (path === "/api/workspace")
       return route.fulfill({
         json: {
@@ -400,4 +403,60 @@ test("saving a new live caption clears the consent given for the previous revisi
   ).toBeDisabled();
   expect(revisionReceived).toBe(0);
   expect(item.revision).toBe(1);
+});
+
+test("AI settings offer all eight providers, select default models and retain a custom model", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const provider = page.getByRole("combobox", {
+    name: "Provider AI",
+    exact: true,
+  });
+  await expect(provider.locator("option")).toHaveText([
+    "OpenRouter",
+    "Cloudflare Workers AI",
+    "Gemini",
+    "NVIDIA NIM",
+    "Cohere",
+    "Hugging Face",
+    "Mistral",
+    "Groq",
+  ]);
+  for (const [id, model] of [
+    ["gemini", "gemini-2.5-flash-lite"],
+    ["nvidia", "meta/llama-3.1-8b-instruct"],
+    ["cohere", "command-a-03-2025"],
+    ["huggingface", "meta-llama/Llama-3.3-70B-Instruct"],
+    ["mistral", "mistral-small-latest"],
+    ["groq", "llama-3.3-70b-versatile"],
+    ["cloudflare", "@cf/meta/llama-3.1-8b-instruct"],
+    ["openrouter", "openai/gpt-4o-mini"],
+  ]) {
+    await provider.selectOption(id);
+    await expect(page.getByLabel("Model", { exact: true })).toHaveValue(model);
+  }
+  for (const label of [
+    "OpenRouter API key",
+    "Gemini API key",
+    "NVIDIA NIM API key",
+    "Cohere API key",
+    "Hugging Face access token",
+    "Mistral API key",
+    "Groq API key",
+  ])
+    await expect(page.getByLabel(label, { exact: true })).toBeDisabled();
+  await provider.selectOption("groq");
+  await page.getByLabel("Model", { exact: true }).fill("llama-3.1-8b-instant");
+  await page
+    .getByRole("button", { name: "Simpan settings", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toHaveText("Settings tersimpan.");
+  await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(provider).toHaveValue("groq");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
+    "llama-3.1-8b-instant",
+  );
 });

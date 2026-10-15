@@ -1,3 +1,6 @@
+import type { AIProvider } from "./aiProviders";
+import type { UGCStory } from "./ugc";
+
 export type Room =
   "research" | "content" | "schedule" | "publish" | "analytics";
 export type Status =
@@ -37,6 +40,8 @@ export interface Content {
   publishedAt?: string;
   analyticsSyncedAt?: string;
   researchIds?: string[];
+  ugc?: UGCStory;
+  studioProjectId?: string;
 }
 export interface Competitor {
   id: string;
@@ -60,7 +65,7 @@ export interface Activity {
   time: string;
 }
 export interface Settings {
-  provider: "openrouter" | "cloudflare";
+  provider: AIProvider;
   model: string;
   retentionMonths: number;
   automaticDrafts: boolean;

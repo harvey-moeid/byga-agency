@@ -24,3 +24,26 @@ Receipt cron disimpan 30 hari, sehingga occurrence yang sudah dimulai tidak diul
 Pemeriksaan akhir `wrangler deploy --dry-run --outdir .wrangler/dry-run` juga lolos: paket Worker 1056,90 KiB (gzip 192,99 KiB), dengan bindings D1, R2, assets dan APP_URL yang sesuai. Tidak ada upload atau deployment produksi.
 
 Deployment/domain produksi, provider AI nyata, aplikasi/akun TikTok nyata, Research API pengguna dan Discord/Telegram nyata belum diuji pada sesi ini. Lihat [STATUS.md](STATUS.md) dan [INTEGRATIONS.md](INTEGRATIONS.md) untuk implementasi dan syarat aktivasi.
+
+## Pembaruan generator UGC — 15 Oktober 2026
+
+`npm test`: **90/90 lolos**, termasuk kontrak UGC melalui tujuh provider HTTP, validasi brief/akun/sesi, penolakan JSON atau storyboard tidak lengkap sebelum draft disimpan, persistensi JSON D1 dan pemeliharaan storyboard saat caption diedit. Tes domain juga memeriksa 3–6 adegan, kontinuitas karakter pada prompt gambar, penggunaan gambar sebagai frame awal video, timeline ekspor dan batas panjang input demo.
+
+Tiga tes browser UGC lolos: demo → simpan → reload Content library → salin prompt → unduh `.txt` → isi ulang brief; layout mobile 390×844 tanpa overflow; mode live dengan kegagalan provider lalu coba ulang tanpa kehilangan brief. Alur draft biasa → edit → upload → approval → jadwal juga lolos sebagai regresi. Screenshot mobile diperiksa pada `/tmp/byga-ugc-mobile.png`. `npm run build`, pemeriksaan format dan `git diff --check` lolos.
+
+Respons AI menggunakan simulasi tanpa jaringan provider nyata. Kualitas cerita, konsistensi karakter hasil render dan durasi audio belum diuji dengan provider/model atau tool gambar/video eksternal. Tidak ada deployment, migrasi database baru, pembuatan media atau posting nyata pada pembaruan ini.
+
+## Finalisasi studio kreatif — 15 Oktober 2026
+
+| Pemeriksaan                 | Hasil                                                                                                                                                                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                  | **103/103 lolos** pada delapan file tes, mencakup semua adapter provider HTTP, isolasi konteks approved/percakapan agen, pemeriksaan revisi, tahapan persetujuan, finalisasi draft atomik, pembatalan hasil terlambat, referensi gambar, serta regresi OAuth/publishing lama                                  |
+| `npm run test:e2e`          | **19/19 lolos** di Chromium: alur proyek hingga draft final, revisi hanya satu adegan, riwayat/ekspor JSON, preset dan nama agen persisten, chat terpisah, pembatalan mobile, autosave saat langsung berpindah halaman, profil karakter dan gambar referensi, kantor/animasi/fallback serta seluruh alur lama |
+| `npm run build`             | Typecheck frontend/backend/tes dan build produksi lolos. Paket kantor 3D tetap dimuat terpisah                                                                                                                                                                                                                |
+| Migrasi lokal               | `0003_job_safety.sql` dan `0004_creative_studio.sql` berhasil diterapkan pada database development lokal. Seluruh migrasi juga diterapkan pada D1 terisolasi di tes integrasi                                                                                                                                 |
+| `wrangler deploy --dry-run` | Paket Worker 1102,67 KiB (gzip 204,06 KiB); binding D1/R2/assets sesuai. Tidak melakukan deploy langsung dari lokal                                                                                                                                                                                           |
+| Format/diff                 | Prettier dan `git diff --check` lolos                                                                                                                                                                                                                                                                         |
+
+Screenshot yang diperiksa: [kantor hangat](studio-office.png), [kantor dengan panel chat desktop](studio-chat-desktop.png), dan [percakapan mobile](studio-chat-mobile.png). Mobile diuji pada viewport 390×844; pengukuran pada HP fisik belum dilakukan.
+
+Kontrak provider diuji menggunakan respons simulasi. Tidak ada generasi AI/media, posting TikTok atau notifikasi eksternal nyata dalam tes. Referensi gambar disimpan dan dipakai sebagai referensi produksi, tanpa klaim bahwa adapter model teks melakukan analisis gambar. Panduan dan batas penyimpanan ada di [STUDIO.md](STUDIO.md).

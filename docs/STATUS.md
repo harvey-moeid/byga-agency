@@ -1,6 +1,6 @@
 # Status implementasi Byga Agency
 
-Audit dan penyelesaian: 12 Oktober 2026. Implementasi MVP tersedia dalam checkout ini; koneksi produksi belum dinyatakan terverifikasi. Bukti pengujian ada di [VALIDATION.md](VALIDATION.md).
+Pembaruan studio kreatif: 15 Oktober 2026. Audit awal: 12 Oktober 2026. Implementasi MVP tersedia dalam checkout ini; koneksi produksi belum dinyatakan terverifikasi. Bukti pengujian ada di [VALIDATION.md](VALIDATION.md).
 
 | Bagian PRD             | Implementasi saat ini                                                                                                                   | Validasi                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -14,6 +14,12 @@ Audit dan penyelesaian: 12 Oktober 2026. Implementasi MVP tersedia dalam checkou
 
 Perbaikan audit ini mencakup penolakan edit/approval usang (HTTP 409), pengikatan consent/token ke creator yang disetujui saat OAuth berganti, perlindungan publish terhadap revisi bersamaan, penolakan GLB sebagai video review, byte-range video yang benar (206/416), deduplikasi cron, pengiriman notifikasi paralel, settings live setelah login, expiry sesi, isolasi demo/live, serta gerak avatar pada perangkat dengan frame rate rendah. Mode 3D ringan untuk mobile/renderer software mengurangi resolusi dan menonaktifkan shadow; pengguna dapat mengganti kualitas melalui kontrol kantor.
 
-Sebelum mengaktifkan produksi, seluruh migrasi termasuk `0003_job_safety.sql` harus diterapkan; Worker secrets, resource D1/R2, credential provider dan approval produk TikTok harus tersedia. Setelah itu, validasi satu akun dan satu video yang disetujui pengguna sampai publish dan analytics terkonfirmasi. Aktifkan cron AI/notifikasi hanya setelah konfigurasi masing-masing siap.
+Sebelum mengaktifkan produksi, seluruh migrasi hingga `0004_creative_studio.sql` harus diterapkan; Worker secrets, resource D1/R2, credential provider dan approval produk TikTok harus tersedia. Setelah itu, validasi satu akun dan satu video yang disetujui pengguna sampai publish dan analytics terkonfirmasi. Aktifkan cron AI/notifikasi hanya setelah konfigurasi masing-masing siap.
 
 Furnitur masih prosedural. Avatar realistis sudah dibundel; facial animation tambahan dan pengukuran performa pada HP fisik belum dilakukan. Form jadwal mobile telah diuji; drag native melalui sentuhan dan auto-scroll belum diklaim didukung. Multi-platform di luar TikTok dan multi-tenant berada di luar MVP yang diputuskan PRD.
+
+## Studio kreatif finalisasi
+
+Kantor 3D kini memiliki palet hangat, kayu, tanaman, brainstorming, visual lab, set produksi dan lounge review. Klik agen membuka percakapan, dengan panel kanan desktop dan layar penuh mobile. Nama, peran, warna, preset dan instruksi custom dapat disimpan. Lima model manusia yang telah dibundel tetap dipakai.
+
+Proyek UGC menyatukan brief autosave, profil karakter cerita dengan referensi gambar, percakapan per agen, konteks approved lintas agen, pratinjau/persetujuan setiap tahap, revisi per adegan, penandaan hasil usang dan riwayat versi. Persetujuan final membuat draft Content library; posting dan analytics tetap memakai menu operasional. API D1 memakai pemeriksaan revisi, pembatalan run dan transaksi finalisasi atomik. Detail dan batas implementasi: [STUDIO.md](STUDIO.md).

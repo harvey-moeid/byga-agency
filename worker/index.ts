@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { z } from "zod";
+import { registerStudioRoutes } from "./studio";
+import { StudioConflict } from "../src/studio";
+import { aiProviderIds } from "../src/aiProviders";
 import {
   approve,
   schedule,
@@ -23,7 +26,8 @@ import {
   ContentConflict,
 } from "./db";
 import { notify, deliverNotifications } from "./notifications";
-import { generate } from "./ai";
+import { generate, generateUGC } from "./ai";
+import { ugcBriefSchema } from "../src/ugc";
 import {
   registerTikTokRoutes,
   creatorInfo,
@@ -45,8 +49,8 @@ import {
 import { registerAnalyticsRoutes, syncAnalytics, recommend } from "./analytics";
 const app = new Hono<{ Bindings: Env }>();
 const settingsSchema = z.object({
-  provider: z.enum(["openrouter", "cloudflare"]),
-  model: z.string().min(1).max(120),
+  provider: z.enum(aiProviderIds),
+  model: z.string().trim().min(1).max(120),
   retentionMonths: z.number().int().min(1).max(12),
   automaticDrafts: z.boolean(),
   notification: z.enum(["none", "discord", "telegram"]),
@@ -77,7 +81,7 @@ app.onError((err, c) => {
     { error: err instanceof z.ZodError ? "Input tidak valid." : err.message },
     err instanceof IntegrationUnavailable
       ? 503
-      : err instanceof ContentConflict
+      : err instanceof ContentConflict || err instanceof StudioConflict
         ? 409
         : 400,
   );
@@ -285,13 +289,13 @@ app.post("/api/accounts", async (c) => {
 });
 app.delete("/api/accounts/:id", async (c) => {
   const used = await c.env.DB.prepare(
-    "SELECT id FROM contents WHERE account_id=? LIMIT 1",
+    "SELECT id FROM contents WHERE account_id=? UNION ALL SELECT id FROM studio_projects WHERE account_id=? LIMIT 1",
   )
-    .bind(c.req.param("id"))
+    .bind(c.req.param("id"), c.req.param("id"))
     .first();
   if (used)
     return c.json(
-      { error: "Akun memiliki konten dan belum dapat dihapus." },
+      { error: "Akun memiliki konten atau proyek dan belum dapat dihapus." },
       409,
     );
   await c.env.DB.prepare("DELETE FROM accounts WHERE id=?")
@@ -322,6 +326,15 @@ app.delete("/api/competitors/:id", async (c) => {
 app.post("/api/contents/generate", async (c) => {
   const b = briefSchema.parse(await c.req.json());
   return c.json(await generate(c.env, b.brief, b.accountId, b.researchIds));
+});
+app.post("/api/contents/generate-ugc", async (c) => {
+  const body = z
+    .object({
+      accountId: z.string().min(1).max(100),
+      brief: ugcBriefSchema,
+    })
+    .parse(await c.req.json());
+  return c.json(await generateUGC(c.env, body.accountId, body.brief));
 });
 app.patch("/api/contents/:id", async (c) => {
   const old = await content(c.env, c.req.param("id"));
@@ -477,8 +490,24 @@ app.post("/api/files", async (c) => {
       bytes[2] === 0xdf &&
       bytes[3] === 0xa3,
     glb = new TextDecoder().decode(bytes.slice(0, 4)) === "glTF";
-  if (!mp4 && !webm && !glb)
-    throw new Error("Format harus MP4, WebM, atau GLB.");
+  const png =
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a;
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const imageWebp =
+    new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" &&
+    new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP";
+  const image = png || jpeg || imageWebp;
+  if (image && file.size > 5 * 1024 * 1024)
+    throw new Error("Gambar referensi maksimal 5 MB.");
+  if (!mp4 && !webm && !glb && !image)
+    throw new Error("Format harus MP4, WebM, GLB, PNG, JPG, atau WebP.");
   if (glb) {
     if (file.size < 20) throw new Error("GLB tidak valid.");
     if (file.size > 10 * 1024 * 1024)
@@ -502,10 +531,20 @@ app.post("/api/files", async (c) => {
     )
       throw new Error("Gunakan GLB dengan tekstur/buffer embedded.");
   }
-  const mime = glb ? "model/gltf-binary" : mp4 ? "video/mp4" : "video/webm";
+  const mime = png
+    ? "image/png"
+    : jpeg
+      ? "image/jpeg"
+      : imageWebp
+        ? "image/webp"
+        : glb
+          ? "model/gltf-binary"
+          : mp4
+            ? "video/mp4"
+            : "video/webm";
   const mediaValue = form.get("media");
   const media =
-    !glb && typeof mediaValue === "string"
+    !glb && !image && typeof mediaValue === "string"
       ? z
           .object({
             duration: z.number().positive().max(3600),
@@ -604,6 +643,26 @@ app.delete("/api/files/:id", async (c) => {
       { error: "File digunakan konten. Tidak dapat dihapus." },
       409,
     );
+  const [characterRef, projectRef] = await Promise.all([
+    c.env.DB.prepare(
+      "SELECT id FROM studio_characters WHERE json_extract(data,'$.referenceAssetId')=? LIMIT 1",
+    )
+      .bind(id)
+      .first(),
+    c.env.DB.prepare(
+      "SELECT id FROM studio_projects WHERE json_extract(data,'$.briefDraft.characterProfile.referenceAssetId')=? OR json_extract(data,'$.brief.data.characterProfile.referenceAssetId')=? OR EXISTS(SELECT 1 FROM json_each(json_extract(studio_projects.data,'$.history')) AS h WHERE json_extract(h.value,'$.payload.stage')='brief' AND json_extract(h.value,'$.payload.data.characterProfile.referenceAssetId')=?) LIMIT 1",
+    )
+      .bind(id, id, id)
+      .first(),
+  ]);
+  if (characterRef || projectRef)
+    return c.json(
+      {
+        error:
+          "Gambar digunakan profil karakter atau riwayat proyek. Tidak dapat dihapus.",
+      },
+      409,
+    );
   if ((await readSettings(c.env)).avatarAssetId === id)
     throw new Error(
       "Aset avatar aktif tidak dapat dihapus. Ganti avatar di Settings.",
@@ -631,6 +690,12 @@ app.put("/api/settings", async (c) => {
   const keys = z
     .object({
       openrouterKey: z.string().max(500).optional(),
+      geminiKey: z.string().trim().max(500).optional(),
+      nvidiaKey: z.string().trim().max(500).optional(),
+      cohereKey: z.string().trim().max(500).optional(),
+      huggingfaceKey: z.string().trim().max(500).optional(),
+      mistralKey: z.string().trim().max(500).optional(),
+      groqKey: z.string().trim().max(500).optional(),
       tiktokClientKey: z.string().min(1).max(500).optional(),
       tiktokClientSecret: z.string().min(1).max(1000).optional(),
       researchClientKey: z.string().min(1).max(500).optional(),
@@ -686,6 +751,7 @@ app.put("/api/settings", async (c) => {
   return c.json({ ok: true });
 });
 registerTikTokRoutes(app);
+registerStudioRoutes(app);
 registerPublishRoutes(app);
 registerResearchRoutes(app);
 registerAnalyticsRoutes(app);
