@@ -4,6 +4,8 @@
   "main": "worker/index.ts",
   "compatibility_date": "2025-10-11",
   "observability": { "enabled": true },
+  "workers_dev": true,
+  "routes": [{ "pattern": "agency.muidsoft.com", "custom_domain": true }],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

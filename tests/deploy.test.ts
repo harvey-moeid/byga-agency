@@ -48,7 +48,13 @@ if (args.includes('--dry-run') && process.env.TEST_FAIL_DRY_RUN === 'true') proc
       .split("\n")
       .map((line) => JSON.parse(line));
   } catch {}
-  return { ...result, commands };
+  let config;
+  try {
+    config = JSON.parse(
+      readFileSync(join(cwd, ".wrangler/deploy.json"), "utf8"),
+    );
+  } catch {}
+  return { ...result, commands, config };
 }
 it("refuses invalid production configuration before contacting Cloudflare", () => {
   for (const extra of [
@@ -75,10 +81,21 @@ it("stops before migration when secrets are absent or the bundle fails validatio
 it("validates secrets and bundle before migrating and deploying", () => {
   const result = deploy();
   expect(result.status, result.stderr).toBe(0);
+  expect(result.config.routes).toEqual([
+    { pattern: "agency.test", custom_domain: true },
+  ]);
   expect(result.commands.map((args) => args.slice(0, 3))).toEqual([
     ["wrangler", "secret", "list"],
     ["wrangler", "deploy", "--dry-run"],
     ["wrangler", "d1", "migrations"],
     ["wrangler", "deploy", "--config"],
   ]);
+});
+
+it("does not provision a custom domain for Cloudflare workers.dev origins", () => {
+  const result = deploy({
+    BYGA_APP_URL: "https://byga-agency.harveymoeid.workers.dev",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.config.routes).toEqual([]);
 });

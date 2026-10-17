@@ -27,6 +27,11 @@ if (
   throw new Error(
     "BYGA_APP_URL must be an HTTPS origin without a path or credentials.",
   );
+// Provision the same hostname that the post-deploy readiness gate checks.
+// workers.dev origins are provided by Cloudflare and are not custom domains.
+config.routes = appUrl.hostname.endsWith(".workers.dev")
+  ? []
+  : [{ pattern: appUrl.hostname, custom_domain: true }];
 if (process.env.BYGA_ENABLE_WORKERS_AI === "true")
   config.ai = { binding: "AI" };
 await mkdir(".wrangler", { recursive: true });

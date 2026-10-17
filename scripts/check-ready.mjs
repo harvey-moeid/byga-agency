@@ -7,25 +7,32 @@ if (
 )
   throw new Error("Readiness verification requires HTTPS outside localhost.");
 let status = "unreachable";
-for (let attempt = 0; attempt < 6; attempt++) {
+const attempts = 12;
+const endpoint = new URL("/api/ready", base);
+for (let attempt = 0; attempt < attempts; attempt++) {
   try {
-    const response = await fetch(new URL("/api/ready", base), {
+    const response = await fetch(endpoint, {
       signal: AbortSignal.timeout(5000),
       redirect: "error",
       cache: "no-store",
     });
-    status = String(response.status);
-    if (response.ok && (await response.json()).ok === true) {
+    status = `HTTP ${response.status}`;
+    const json = await response.json().catch(() => null);
+    if (response.ok && json?.ok === true) {
       console.log(
         "Production readiness passed: secrets, D1 schema/settings and R2.",
       );
       process.exit(0);
     }
-  } catch {
-    status = "unreachable or invalid response";
+    if (!json) status += " (non-JSON response; check domain routing)";
+  } catch (error) {
+    status = error.cause?.code || error.name || "network error";
   }
-  if (attempt < 5) await setTimeout(3000);
+  console.warn(
+    `Readiness ${attempt + 1}/${attempts}: ${endpoint.origin} — ${status}`,
+  );
+  if (attempt < attempts - 1) await setTimeout(5000);
 }
 throw new Error(
-  `Production readiness failed (${status}). Inspect deployment and Worker logs.`,
+  `Production readiness failed at ${endpoint} (${status}). Check Cloudflare custom domain/DNS, TLS, and Worker logs.`,
 );
