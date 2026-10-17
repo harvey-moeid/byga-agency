@@ -4,6 +4,8 @@ Kantor AI 3D interaktif dan pipeline konten TikTok, berdasarkan PRD **AI Agent D
 
 [Status implementasi](docs/STATUS.md) · [Panduan studio kreatif](docs/STUDIO.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot studio](docs/studio-office.png) · [Chat desktop](docs/studio-chat-desktop.png) · [Chat mobile](docs/studio-chat-mobile.png)
 
+Audit produksi terbaru: [gate rilis, syarat penerimaan dan pemulihan](docs/PRODUCTION.md). Kode telah diuji secara lokal; deployment tujuan dan integrasi eksternal tetap memerlukan bukti produksi.
+
 ## Jalankan dashboard
 
 Node.js 22 atau 24. Checkout ini adalah workspace utama; tidak memerlukan Git worktree.

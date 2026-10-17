@@ -89,6 +89,8 @@ app.onError((err, c) => {
 app.use("/api/*", async (c, next) => {
   c.header("Cache-Control", "no-store");
   c.header("X-Content-Type-Options", "nosniff");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("X-Frame-Options", "DENY");
   if (!["GET", "HEAD"].includes(c.req.method)) {
     const origin = c.req.header("Origin");
     if (
@@ -97,7 +99,7 @@ app.use("/api/*", async (c, next) => {
     )
       return c.json({ error: "Origin tidak diizinkan." }, 403);
   }
-  if (c.req.path === "/api/health") {
+  if (["/api/health", "/api/ready"].includes(c.req.path)) {
     await next();
     return;
   }
@@ -153,6 +155,42 @@ app.get("/api/health", (c) =>
     credentialsRequired: true,
   }),
 );
+// Liveness stays cheap; readiness checks secrets, the required schema and R2.
+// Do not expose configuration details or database errors to unauthenticated callers.
+app.get("/api/ready", async (c) => {
+  if (
+    !c.env.DASHBOARD_PASSWORD ||
+    c.env.DASHBOARD_PASSWORD.length < 12 ||
+    !c.env.ENCRYPTION_KEY ||
+    c.env.ENCRYPTION_KEY.length < 32
+  )
+    return c.json({ ok: false }, 503);
+  try {
+    const [settings] = await Promise.all([
+      c.env.DB.prepare("SELECT data FROM settings WHERE id=1").first<{
+        data: string;
+      }>(),
+      c.env.DB.prepare(
+        "SELECT revision,summary FROM studio_projects LIMIT 0",
+      ).all(),
+      c.env.DB.prepare(
+        "SELECT lease_until,publish_id FROM publish_jobs LIMIT 0",
+      ).all(),
+      c.env.DB.prepare(
+        "SELECT lease_until FROM notification_jobs LIMIT 0",
+      ).all(),
+      c.env.FILES.head("__byga_readiness__"),
+    ]);
+    if (
+      !settings ||
+      !settingsSchema.safeParse(JSON.parse(settings.data)).success
+    )
+      return c.json({ ok: false }, 503);
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ ok: false }, 503);
+  }
+});
 app.post("/api/login", async (c) => {
   const { password } = z
     .object({ password: z.string().max(256) })

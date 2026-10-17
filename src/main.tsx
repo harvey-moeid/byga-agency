@@ -1,3 +1,4 @@
+import "./csp";
 import "@fontsource-variable/dm-sans";
 import "@fontsource-variable/manrope";
 import React from "react";

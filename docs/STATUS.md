@@ -1,6 +1,6 @@
 # Status implementasi Byga Agency
 
-Pembaruan studio kreatif: 15 Oktober 2026. Audit awal: 12 Oktober 2026. Implementasi MVP tersedia dalam checkout ini; koneksi produksi belum dinyatakan terverifikasi. Bukti pengujian ada di [VALIDATION.md](VALIDATION.md).
+Audit produksi terbaru: 17 Oktober 2026. Pembaruan studio kreatif: 15 Oktober 2026. Audit awal: 12 Oktober 2026. Implementasi MVP tersedia dalam checkout ini; koneksi produksi belum dinyatakan terverifikasi. Bukti pengujian ada di [VALIDATION.md](VALIDATION.md); gate rilis dan syarat operasional ada di [PRODUCTION.md](PRODUCTION.md).
 
 | Bagian PRD             | Implementasi saat ini                                                                                                                   | Validasi                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
