@@ -25,18 +25,24 @@ Cron memeriksa maksimal lima referensi per jam, bergiliran. Pagination dan jende
 
 ## Provider AI
 
-Delapan provider tersedia di Settings → AI & otomasi. Pilih provider, isi credential yang sesuai di API key & notifikasi, lalu simpan. Penggantian provider mengisi model default; kolom Model dapat diedit sesuai model yang tersedia untuk akun Anda. Semua fitur teks (caption, prompt video, draft otomatis, ringkasan/rekomendasi analytics) menggunakan provider yang dipilih. Tidak ada generator video otomatis atau fallback ke provider lain.
+Delapan provider tersedia di Settings → AI & otomasi. Setiap provider menyediakan **tepat dua model**, dengan nama yang mudah dibaca, ID model dan deskripsi. Mengganti provider memilih model default; backend menolak model yang bukan milik provider tersebut. Semua fitur teks menggunakan pilihan yang disimpan.
 
-| Provider              | Model default                       | Credential di Settings                                    |
-| --------------------- | ----------------------------------- | --------------------------------------------------------- |
-| OpenRouter            | `openai/gpt-4o-mini`                | OpenRouter API key                                        |
-| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct`    | Binding `AI`, tanpa key di form                           |
-| Gemini                | `gemini-2.5-flash-lite`             | Gemini API key (Google AI Studio)                         |
-| NVIDIA NIM            | `meta/llama-3.1-8b-instruct`        | NVIDIA NIM API key (NVIDIA API Catalog hosted API)        |
-| Cohere                | `command-a-03-2025`                 | Cohere API key                                            |
-| Hugging Face          | `meta-llama/Llama-3.3-70B-Instruct` | Hugging Face access token dengan izin Inference Providers |
-| Mistral               | `mistral-small-latest`              | Mistral API key                                           |
-| Groq                  | `llama-3.3-70b-versatile`           | Groq API key                                              |
+| Provider | Model default | Pilihan kedua | Credential |
+| --- | --- | --- | --- |
+| OpenRouter | `openai/gpt-4o-mini` | `openai/gpt-4.1-mini` | OpenRouter API key |
+| Cloudflare Workers AI | `@cf/meta/llama-3.1-8b-instruct-fast` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Binding `AI` |
+| Gemini | `gemini-2.5-flash-lite` | `gemini-2.5-flash` | Gemini API key |
+| NVIDIA NIM | `meta/llama-3.1-8b-instruct` | `meta/llama-3.3-70b-instruct` | NVIDIA NIM API key |
+| Cohere | `command-a-03-2025` | `command-r-08-2024` | Cohere API key |
+| Hugging Face | `meta-llama/Llama-3.3-70B-Instruct` | `Qwen/Qwen2.5-72B-Instruct` | Token dengan izin Inference Providers |
+| Mistral | `mistral-small-latest` | `mistral-large-latest` | Mistral API key |
+| Groq | `openai/gpt-oss-120b` | `openai/gpt-oss-20b` | Groq API key |
+
+Katalog frontend dan backend berasal dari `src/aiProviders.ts`. Pengaturan lama dibaca dengan normalisasi tanpa menghapus konten atau credential: model di luar katalog kembali ke default provider, sedangkan Groq `llama-3.1-8b-instant` diarahkan ke GPT OSS 20B. Model kedua yang valid tetap dipertahankan. Normalisasi bukan fallback saat request: kegagalan API tetap ditampilkan dan tidak otomatis mengganti provider/model.
+
+Sumber katalog: [OpenRouter](https://openrouter.ai/models), [Cloudflare](https://developers.cloudflare.com/workers-ai/models/), [Gemini](https://ai.google.dev/gemini-api/docs/models), [NVIDIA](https://docs.api.nvidia.com/nim/reference/llm-apis), [Cohere](https://docs.cohere.com/docs/models), [Hugging Face](https://huggingface.co/docs/inference-providers/index), [Mistral](https://docs.mistral.ai/models/), dan [Groq](https://console.groq.com/docs/models). Model Groq lama diganti mengikuti [penghentian layanan 16 Agustus 2026](https://console.groq.com/docs/deprecations). Ketersediaan, akses, dan kuota aktual mengikuti akun provider.
+
+Groq GPT OSS memakai `reasoning_effort: low`, `include_reasoning: false` dan tambahan budget 4.096 token agar penalaran tidak menghabiskan ruang JSON akhir. Gemini menonaktifkan thinking untuk kedua model Flash agar budget keluaran dipakai hasil konten.
 
 Credential disimpan terenkripsi di D1 dan tidak dikembalikan ke browser; form kosong mempertahankan credential tersimpan. Mode demo tidak menyimpan key dan tidak memanggil provider. Tidak perlu migrasi database baru. Cloudflare Workers AI memerlukan binding `AI` (opsi deploy `BYGA_ENABLE_WORKERS_AI=true`). NVIDIA NIM menggunakan API hosted, bukan endpoint NIM self-hosted.
 

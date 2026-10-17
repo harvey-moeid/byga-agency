@@ -56,7 +56,12 @@ import {
 } from "./domain";
 import { saveVideo, getVideo, deleteVideo } from "./storage";
 import { api, ApiError } from "./api";
-import { aiProviderIds, aiProviders, type AIProvider } from "./aiProviders";
+import {
+  aiProviderIds,
+  aiProviders,
+  normalizeAISettings,
+  type AIProvider,
+} from "./aiProviders";
 import UGCGenerator, { UGCStoryboard } from "./UGCGenerator";
 import { useStudio } from "./useStudio";
 import {
@@ -115,7 +120,7 @@ function initial(): Workspace {
         Array.isArray(data.contents) &&
         data.settings
       )
-        return data;
+        return { ...data, settings: normalizeAISettings(data.settings) };
     }
   } catch {}
   return makeDemo();
@@ -267,6 +272,61 @@ export default function App() {
   const workspaceRequest = useRef(0);
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState(false);
+  const navigationRef = useRef<HTMLElement>(null);
+  const navigationTrigger = useRef<HTMLElement | null>(null);
+  const openNavigation = (trigger: HTMLElement) => {
+    navigationTrigger.current = trigger;
+    setMenu(true);
+  };
+  useEffect(() => {
+    if (!menu) return;
+    const previous = navigationTrigger.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const drawer = navigationRef.current;
+    const focusDrawer = () => {
+      drawer
+        ?.querySelector<HTMLElement>(".drawer-close")
+        ?.focus({ preventScroll: true });
+    };
+    const focusFrame = requestAnimationFrame(focusDrawer);
+    // Focus after the slide-in as well: hidden drawers cannot receive focus.
+    drawer?.addEventListener("transitionend", focusDrawer, { once: true });
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(false);
+      if (event.key !== "Tab") return;
+      const nodes = drawer?.querySelectorAll<HTMLElement>(
+        "button:not(:disabled),a[href]",
+      );
+      if (!nodes?.length) return;
+      const first = nodes[0],
+        last = nodes[nodes.length - 1];
+      if (!drawer?.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const desktop = window.matchMedia("(min-width: 761px)");
+    const onResize = () => {
+      if (desktop.matches) setMenu(false);
+    };
+    desktop.addEventListener("change", onResize);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      drawer?.removeEventListener("transitionend", focusDrawer);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKey);
+      desktop.removeEventListener("change", onResize);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [menu]);
   const [filter, setFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
   const [draftAccount, setDraftAccount] = useState(
@@ -321,7 +381,7 @@ export default function App() {
         .then((data) => {
           if (!alive || requestId !== workspaceRequest.current) return;
           setWorkspace(data);
-          setFormSettings(data.settings);
+          setFormSettings(normalizeAISettings(data.settings));
           setLoggedIn(true);
         })
         .catch((error) => {
@@ -741,6 +801,7 @@ export default function App() {
     );
     setMenu(false);
     setSearch("");
+    window.scrollTo({ top: 0, behavior: "instant" });
   };
   const pickRoom = (room: Room) => {
     setSelected(room);
@@ -817,6 +878,16 @@ export default function App() {
           Buat konten
         </button>
       </div>
+      <label className="mobile-content-search">
+        <Search size={18} />
+        <input
+          type="search"
+          aria-label="Cari konten di library"
+          placeholder="Cari judul atau caption…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </label>
       <div className="filter-row">
         <div className="tabs">
           {[
@@ -867,7 +938,7 @@ export default function App() {
             task(async () => {
               await api("/login", { password: loginPassword });
               const data = await refresh();
-              setFormSettings(data.settings);
+              setFormSettings(normalizeAISettings(data.settings));
               setLoggedIn(true);
               setLoginPassword("");
             });
@@ -924,7 +995,32 @@ export default function App() {
     );
   return (
     <div className={`app-shell ${agentPanel ? "studio-chat-open" : ""}`}>
-      <aside className={`sidebar ${menu ? "mobile-open" : ""}`}>
+      <a className="skip-link" href="#main-content">
+        Langsung ke konten
+      </a>
+      {menu && (
+        <button
+          className="navigation-backdrop"
+          aria-label="Tutup latar navigasi"
+          tabIndex={-1}
+          onClick={() => setMenu(false)}
+        />
+      )}
+      <aside
+        id="workspace-navigation"
+        ref={navigationRef}
+        aria-label="Navigasi workspace"
+        role={menu ? "dialog" : undefined}
+        aria-modal={menu || undefined}
+        className={`sidebar ${menu ? "mobile-open" : ""}`}
+      >
+        <button
+          className="drawer-close icon-button"
+          aria-label="Tutup navigasi"
+          onClick={() => setMenu(false)}
+        >
+          <X size={20} />
+        </button>
         <button
           className="brand"
           onClick={() => navigate("office")}
@@ -949,6 +1045,7 @@ export default function App() {
             <button
               key={id}
               onClick={() => navigate(id)}
+              aria-current={page === id ? "page" : undefined}
               className={`nav-item ${page === id ? "active" : ""}`}
             >
               <Icon size={18} />
@@ -976,6 +1073,7 @@ export default function App() {
             </button>
           </div>
           <button
+            aria-current={page === "settings" ? "page" : undefined}
             className={`nav-item ${page === "settings" ? "active" : ""}`}
             onClick={() => navigate("settings")}
           >
@@ -992,13 +1090,15 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <div className="main-shell">
+      <div className="main-shell" inert={menu}>
         <header className="topbar">
           <div className="breadcrumbs">
             <button
               className="mobile-toggle icon-button"
               aria-label="Buka navigasi"
-              onClick={() => setMenu(!menu)}
+              aria-expanded={menu}
+              aria-controls="workspace-navigation"
+              onClick={(event) => openNavigation(event.currentTarget)}
             >
               <Menu size={20} />
             </button>
@@ -1036,7 +1136,7 @@ export default function App() {
             </button>
           </div>
         </header>
-        <main>
+        <main id="main-content" tabIndex={-1} data-page={page}>
           <div className="demo-banner">
             <span>
               <ShieldCheck size={14} />
@@ -1949,7 +2049,19 @@ export default function App() {
                     · video maksimal 50 MB, GLB 10 MB, gambar 5 MB
                   </p>
                 </div>
-                <label className="button primary">
+                <label
+                  className="button primary"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      event.currentTarget
+                        .querySelector<HTMLInputElement>('input[type="file"]')
+                        ?.click();
+                    }
+                  }}
+                >
                   <Upload size={16} />
                   Upload file
                   <input
@@ -2097,7 +2209,6 @@ export default function App() {
                   {live ? "Keluar sesi live" : "Masuk backend live"}
                 </button>
               </section>
-              <AgentSettings studio={studio} />
               <form
                 className="panel settings-form"
                 onSubmit={(e) => {
@@ -2127,7 +2238,22 @@ export default function App() {
                   });
                 }}
               >
-                <h2>AI & otomasi</h2>
+                <div className="settings-section-heading">
+                  <span className="settings-icon">
+                    <Sparkles size={22} />
+                  </span>
+                  <div>
+                    <span className="eyebrow">
+                      THE INTELLIGENCE BEHIND YOUR IDEAS
+                    </span>
+                    <h2>AI & otomasi</h2>
+                    <p>
+                      Delapan provider. Dua pilihan model untuk setiap
+                      kebutuhan.
+                    </p>
+                  </div>
+                  <span className="soft-badge">8 PROVIDER · 16 MODEL</span>
+                </div>
                 <div className="form-grid">
                   <label>
                     Provider AI
@@ -2152,8 +2278,9 @@ export default function App() {
                   </label>
                   <label>
                     Model
-                    <input
+                    <select
                       required
+                      aria-describedby="selected-model-description"
                       value={formSettings.model}
                       onChange={(e) =>
                         setFormSettings((s) => ({
@@ -2161,8 +2288,56 @@ export default function App() {
                           model: e.target.value,
                         }))
                       }
-                    />
+                    >
+                      {aiProviders[formSettings.provider].models.map(
+                        (model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.label}
+                          </option>
+                        ),
+                      )}
+                    </select>
                   </label>
+                </div>
+                <div
+                  className="selected-model-info"
+                  id="selected-model-description"
+                >
+                  <div className="model-orbit">
+                    <Sparkles size={21} />
+                  </div>
+                  <div>
+                    <strong>
+                      {
+                        aiProviders[formSettings.provider].models.find(
+                          (model) => model.id === formSettings.model,
+                        )?.label
+                      }
+                    </strong>
+                    <p>
+                      {
+                        aiProviders[formSettings.provider].models.find(
+                          (model) => model.id === formSettings.model,
+                        )?.description
+                      }
+                    </p>
+                    <code>{formSettings.model}</code>
+                    <small>
+                      {formSettings.provider === "cloudflare"
+                        ? "Menggunakan binding AI di backend Cloudflare."
+                        : `Memerlukan ${aiProviders[formSettings.provider].label} ${formSettings.provider === "huggingface" ? "access token" : "API key"}.`}
+                    </small>
+                  </div>
+                  <a
+                    href={aiProviders[formSettings.provider].docs}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="model-docs"
+                  >
+                    Dokumentasi <ArrowUpRight size={15} />
+                  </a>
+                </div>
+                <div className="form-grid">
                   <label>
                     Retensi activity history
                     <select
@@ -2348,11 +2523,24 @@ export default function App() {
                     </label>
                   ))}
                 </div>
-                <button disabled={busy} className="button primary">
-                  <Check size={16} />
-                  Simpan settings
-                </button>
+                <div className="settings-save-bar">
+                  <span>
+                    <ShieldCheck size={16} />
+                    {live
+                      ? "Credential disimpan terenkripsi"
+                      : "Preferensi tersimpan di perangkat ini"}
+                  </span>
+                  <button disabled={busy} className="button primary">
+                    {busy ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Check size={16} />
+                    )}
+                    Simpan settings
+                  </button>
+                </div>
               </form>
+              <AgentSettings studio={studio} />
               <section className="panel">
                 <div className="section-head">
                   <h2>Akun TikTok</h2>
@@ -2466,6 +2654,45 @@ export default function App() {
           </footer>
         </main>
       </div>
+      <nav
+        className="mobile-bottom-nav"
+        aria-label="Navigasi cepat"
+        inert={menu || !!modal || !!detail || !!agentPanel || newProject}
+      >
+        {(
+          [
+            { id: "office", label: "Beranda", icon: LayoutDashboard },
+            { id: "content", label: "Konten", icon: Layers3 },
+            { id: "ugc", label: "Kreasi", icon: Sparkles },
+            { id: "schedule", label: "Jadwal", icon: CalendarDays },
+          ] as const
+        ).map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            aria-label={`Buka ${label.toLowerCase()}`}
+            aria-current={page === id ? "page" : undefined}
+            className={page === id ? "active" : ""}
+            onClick={() => navigate(id)}
+          >
+            <Icon size={21} />
+            <span>{label}</span>
+          </button>
+        ))}
+        <button
+          aria-label="Menu lainnya"
+          aria-expanded={menu}
+          aria-controls="workspace-navigation"
+          onClick={(event) => openNavigation(event.currentTarget)}
+          className={
+            !["office", "content", "ugc", "schedule"].includes(page)
+              ? "active"
+              : ""
+          }
+        >
+          <Menu size={21} />
+          <span>Lainnya</span>
+        </button>
+      </nav>
       {modal === "generate" && (
         <Modal
           title="Ide Anda, langkah pertama."

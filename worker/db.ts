@@ -1,3 +1,4 @@
+import { normalizeAISettings } from "../src/aiProviders";
 import type { Env } from "./env";
 import type { Content, Settings } from "../src/domain";
 import { decrypt } from "./security";
@@ -5,7 +6,7 @@ export async function readSettings(env: Env): Promise<Settings> {
   const row = await env.DB.prepare(
     "SELECT data FROM settings WHERE id=1",
   ).first<{ data: string }>();
-  return JSON.parse(row!.data);
+  return normalizeAISettings(JSON.parse(row!.data) as Settings);
 }
 export async function credential(env: Env, name: string) {
   const row = await env.DB.prepare(
