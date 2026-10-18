@@ -194,7 +194,7 @@ export function TikTokMonitoring({
         </button>
       </div>
       {preference === "api" && !account.connected && (
-        <div className="tiktok-monitor-notice" role="status">
+        <div className="tiktok-monitor-notice">
           <strong>API TikTok belum terhubung — Mode A aktif.</strong>
           <p>
             {configured
@@ -216,7 +216,7 @@ export function TikTokMonitoring({
         <p className="muted" role="status">Memeriksa akses API TikTok…</p>
       )}
       {preference === "api" && !loading && data?.reason && (
-        <p className="tiktok-monitor-notice" role="status">{data.reason}</p>
+        <p className="tiktok-monitor-notice">{data.reason}</p>
       )}
       {preference === "api" && !loading && publicMode && account.connected && (
         <button
