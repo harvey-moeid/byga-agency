@@ -985,6 +985,10 @@ export default function App() {
           <p className="muted small">
             Live memerlukan backend Cloudflare dan Worker secrets.
           </p>
+          <nav className="legal-links login-legal-links" aria-label="Informasi hukum">
+            <a href="/privacy-policy.html">Privacy Policy</a>
+            <a href="/terms-of-service.html">Terms of Service</a>
+          </nav>
         </form>
         {toast && (
           <div role="alert" className="toast">
@@ -2647,6 +2651,10 @@ export default function App() {
               byga agency <span>·</span> A little structure. A lot of
               creativity.
             </span>
+            <nav className="legal-links" aria-label="Informasi hukum">
+              <a href="/privacy-policy.html">Privacy Policy</a>
+              <a href="/terms-of-service.html">Terms of Service</a>
+            </nav>
             <span>
               <span className="live-dot" />
               {live ? "Cloud workspace" : "Demo lokal"}

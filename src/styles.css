@@ -2808,3 +2808,10 @@ input[type="checkbox"] {
     font-size: 10px;
   }
 }
+
+/* Public TikTok application review links: visible without entering a menu. */
+.legal-links { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.legal-links a { font-size: 12px; color: #526b4b; text-decoration: underline; text-underline-offset: 3px; }
+.login-legal-links { justify-content: center; padding-top: 5px; }
+.footer .legal-links { flex: 1; justify-content: center; }
+@media (max-width: 720px) { .footer { flex-wrap: wrap; } .footer .legal-links { flex-basis: 100%; justify-content: flex-start; } }
