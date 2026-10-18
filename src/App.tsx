@@ -80,6 +80,7 @@ import {
   AnalyticsInsights,
 } from "./IntegrationPanels";
 import { videoMetadata } from "./media";
+import { TikTokMonitoring } from "./TikTokMonitoring";
 import { dateKey, dateInput, localToISO, optimalTime } from "./time";
 import type { PublishOptions } from "./domain";
 const Office = lazy(() => import("./Office"));
@@ -2606,7 +2607,7 @@ export default function App() {
                         })
                       }
                     >
-                      {a.connected ? "Putuskan" : "Hubungkan TikTok"}
+                      {a.connected ? "Putuskan" : "Hubungkan API (read-only)"}
                     </button>
                     <button
                       className="icon-button"
@@ -2634,6 +2635,27 @@ export default function App() {
                     </button>
                   </div>
                 ))}
+              </section>
+              <section className="panel">
+                <TikTokMonitoring
+                  accounts={workspace.accounts}
+                  live={live}
+                  configured={Boolean(
+                    workspace.settings.configured?.includes("tiktokClientKey") &&
+                    workspace.settings.configured?.includes("tiktokClientSecret")
+                  )}
+                  onConnect={(account) => {
+                    void task(async () => {
+                      const result = await api<{ url: string }>(
+                        "/accounts/" + account.id + "/oauth",
+                        {},
+                      );
+                      if (new URL(result.url).origin !== "https://www.tiktok.com")
+                        throw new Error("URL OAuth tidak valid.");
+                      location.assign(result.url);
+                    });
+                  }}
+                />
               </section>
               <section className="panel">
                 <h2>Aset kantor & avatar</h2>

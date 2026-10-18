@@ -6,7 +6,7 @@ import type { CreatorInfo, PublishOptions } from "../src/domain";
 import { credential, log } from "./db";
 import { encrypt, decrypt, hash } from "./security";
 const base = "https://open.tiktokapis.com/v2/";
-const scopes = ["user.info.basic", "video.list", "video.publish"];
+const scopes = ["user.info.basic", "user.info.profile", "user.info.stats", "video.list"];
 export class IntegrationUnavailable extends Error {}
 export class TikTokError extends Error {
   constructor(
@@ -287,7 +287,140 @@ export function redirectUri(env: Env) {
     throw new Error("APP_URL harus HTTPS untuk OAuth.");
   return url.origin + "/api/tiktok/callback";
 }
+
+export const monitoringScopes = [
+  "user.info.basic",
+  "user.info.profile",
+  "user.info.stats",
+  "video.list",
+] as const;
+
+interface MonitorUser {
+  open_id?: string;
+  display_name?: string;
+  avatar_url?: string;
+  username?: string;
+  profile_deep_link?: string;
+  bio_description?: string;
+  is_verified?: boolean;
+  follower_count?: number;
+  following_count?: number;
+  likes_count?: number;
+  video_count?: number;
+}
+interface MonitorVideo {
+  id: string;
+  title?: string;
+  share_url?: string;
+  view_count?: number;
+  like_count?: number;
+  comment_count?: number;
+  share_count?: number;
+  create_time?: number;
+}
+export interface TikTokMonitoringResult {
+  mode: "api" | "public";
+  handle: string;
+  profileUrl: string;
+  reason?: string;
+  profile?: MonitorUser;
+  videos?: MonitorVideo[];
+  missingScopes?: string[];
+}
+
+export function creatorProfileUrl(handle: string) {
+  if (!/^@[A-Za-z0-9_.]{1,24}$/.test(handle))
+    throw new Error("Username TikTok tidak valid.");
+  return "https://www.tiktok.com/" + handle;
+}
+
+export async function getTikTokMonitoring(
+  env: Env,
+  accountId: string,
+): Promise<TikTokMonitoringResult | null> {
+  const account = await env.DB.prepare("SELECT handle FROM accounts WHERE id=?")
+    .bind(accountId)
+    .first<{ handle: string }>();
+  if (!account) return null;
+  const fallback: TikTokMonitoringResult = {
+    mode: "public",
+    handle: account.handle,
+    profileUrl: creatorProfileUrl(account.handle),
+    reason: "API belum tersedia. Menampilkan profil publik tanpa login TikTok.",
+  };
+  try {
+    const connection = await env.DB.prepare(
+      "SELECT scopes FROM oauth_connections WHERE account_id=?",
+    ).bind(accountId).first<{ scopes: string }>();
+    if (!connection) return fallback;
+    const granted = new Set(connection.scopes.split(","));
+    if (!granted.has("user.info.basic")) return {
+      ...fallback,
+      reason: "Izin profil dasar belum diberikan. Beralih ke tampilan publik.",
+    };
+    const fields = ["open_id", "display_name", "avatar_url"];
+    if (granted.has("user.info.profile"))
+      fields.push("username", "profile_deep_link", "bio_description", "is_verified");
+    if (granted.has("user.info.stats"))
+      fields.push("follower_count", "following_count", "likes_count", "video_count");
+    const token = await accessToken(env, accountId, "user.info.basic");
+    const profileResult = await tiktok<{ user: MonitorUser }>(
+      "user/info/?fields=" + fields.join(","),
+      token,
+    );
+    const profile = profileResult.user;
+    if (!profile || !profile.open_id)
+      throw new TikTokError("invalid_profile");
+    if (
+      profile.username &&
+      profile.username.toLowerCase() !== account.handle.slice(1).toLowerCase()
+    )
+      return {
+        ...fallback,
+        reason: "Akun yang diotorisasi berbeda dari username tersimpan. Hubungkan ulang akun yang benar.",
+      };
+    let videos: MonitorVideo[] = [];
+    let videosError = false;
+    if (granted.has("video.list")) {
+      try {
+        const list = await tiktok<{ videos?: MonitorVideo[] }>(
+          "video/list/?fields=id,title,share_url,view_count,like_count,comment_count,share_count,create_time",
+          token,
+          { max_count: 10 },
+        );
+        videos = (list.videos || []).slice(0, 10).filter((v) => !!v.id);
+      } catch {
+        videosError = true;
+      }
+    }
+    const missingScopes = monitoringScopes.filter((s) => !granted.has(s));
+    return {
+      mode: "api",
+      handle: account.handle,
+      profileUrl: creatorProfileUrl(account.handle),
+      profile,
+      videos,
+      missingScopes,
+      reason: videosError
+        ? "Daftar video API tidak tersedia; informasi profil tetap ditampilkan."
+        : missingScopes.length
+          ? "Sebagian izin belum diberikan; statistik/video mungkin tidak lengkap."
+          : undefined,
+    };
+  } catch {
+    return {
+      ...fallback,
+      reason: "Akses TikTok API ditolak, kedaluwarsa, atau sedang bermasalah. Tampilan publik digunakan otomatis.",
+    };
+  }
+}
+
 export function registerTikTokRoutes(app: Hono<{ Bindings: Env }>) {
+  app.get("/api/accounts/:id/monitor", async (c) => {
+    const result = await getTikTokMonitoring(c.env, c.req.param("id"));
+    if (!result) return c.json({ error: "Akun tidak ditemukan." }, 404);
+    return c.json(result, 200, { "Cache-Control": "no-store" });
+  });
   app.post("/api/accounts/:id/oauth", async (c) => {
     const id = c.req.param("id");
     if (

@@ -2,15 +2,14 @@
 
 Kode dapat dikembangkan dan diuji tanpa API key. Mode demo tidak mengirim posting atau notifikasi. Tes integrasi memakai API simulasi dengan seluruh jaringan keluar dimatikan.
 
-## TikTok Login Kit dan Content Posting API
+## Monitoring TikTok: B (API read-only) + A (profil publik)
 
-1. Buat aplikasi pada TikTok for Developers, konfigurasi produk Login Kit dan Content Posting API Direct Post, dan lengkapi review yang diwajibkan TikTok.
-2. Set `APP_URL` Worker ke origin HTTPS yang dipakai dashboard. Daftarkan redirect persis `https://agency.muidsoft.com/api/tiktok/callback` jika domain itu yang dipakai. Untuk domain lain, ganti origin. Settings menampilkan redirect yang digunakan kode.
-3. Masukkan client key dan client secret melalui Settings backend live. Jangan memasukkannya ke source atau percakapan.
-4. Hubungkan setiap akun dari Settings. Kode meminta `user.info.basic`, `video.list`, `video.publish`. Scope yang disetujui dan batas creator menentukan fitur yang dapat dipakai.
-5. Upload video MP4 vertikal 9:16, maksimal 50 MB. Review caption, pilih privasi yang tersedia, aturan interaksi, deklarasi brand/AI, konfirmasi hak video/audio dan consent publish. Pilihan privasi tidak diisi otomatis.
-6. Approve, lalu publish atau jadwalkan. Status `publishing` berarti masih menunggu TikTok; `published` hanya setelah konfirmasi API. App yang belum diaudit dapat memiliki pembatasan TikTok, termasuk privasi dan pengguna.
-
+1. Mode **B** memakai TikTok Login Kit dan Display API. Daftarkan aplikasi di TikTok Developers, aktifkan produk tersebut dan daftarkan callback HTTPS `https://agency.muidsoft.com/api/tiktok/callback`.
+2. Simpan client key dan client secret di Settings backend live, lalu hubungkan masing-masing akun TikTok yang Anda miliki/diizinkan. OAuth baru meminta **`user.info.basic`, `user.info.profile`, `user.info.stats`, `video.list`**. Izin tambahan hanya diberikan jika disetujui TikTok/pemilik akun. Tidak meminta `video.publish` atau `video.upload` pada koneksi baru.
+3. Di Settings > Akun TikTok > Monitoring, mode B otomatis mencoba profil/statistik/video melalui API resmi. Saat credential belum ada, login/izin ditolak, token kedaluwarsa, atau API gagal, panel otomatis menampilkan **mode A** (Creator Profile Embed) untuk akun publik. Mode A juga bisa dipilih manual dan tidak memakai kredensial, scraping, atau data statistik palsu.
+4. Creator Profile Embed berasal langsung dari domain TikTok melalui `https://www.tiktok.com/embed.js`, dan dapat dibatasi pada akun privat/di bawah umur, kebijakan browser, atau pengaturan TikTok. Dalam semua kondisi, tersedia tautan buka profil. Tidak ada jaminan seluruh statistik tersedia di mode A.
+5. **Mode monitoring ini tidak memicu posting.** Pipeline publishing lama masih ada di kode untuk kompatibilitas; koneksi OAuth baru tidak memberinya izin publish. Jangan gunakan aksi publish/schedule lama ketika tujuan Anda hanya monitoring. Untuk menghilangkan izin publish yang diberikan sebelumnya, putuskan akun lalu hubungkan ulang dengan scope read-only.
+   
 Token disimpan terenkripsi, refresh otomatis memakai lease D1. OAuth state sekali pakai terikat ke sesi login dan cookie. Menghubungkan creator berbeda membatalkan kelayakan approval sebelumnya; konten perlu direview ulang.
 
 Simpan edit sebelum approval. Pilihan consent direset ketika caption/prompt yang tersimpan berubah. Request edit/transition dari dashboard membawa `expectedRevision`; final approval TikTok juga wajib membawa identitas creator yang ditampilkan form. Respons 409 berarti konten atau antrean berubah dan harus diperiksa ulang. Pergantian creator saat OAuth/reconnect memblokir approval/publish, termasuk jika terjadi di antara pemeriksaan awal dan init. Pekerjaan yang telah diambil publisher tidak dapat direvisi/dihapus saat berjalan.
