@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import { decrypt } from "../worker/security";
 import { makeDemo, type Content } from "../src/domain";
+import { aiProviders, type AIProvider } from "../src/aiProviders";
 import { defaultUGCBrief } from "../src/ugc";
 import { ugcFixture } from "./fixtures/ugc";
 
@@ -67,7 +68,7 @@ const providers = [
     id: "groq",
     label: "Groq",
     key: "groqKey",
-    model: "llama-3.3-70b-versatile",
+    model: "openai/gpt-oss-120b",
     origin: "https://api.groq.com",
     path: "/openai/v1/chat/completions",
     jsonMode: true,
@@ -271,7 +272,7 @@ describe("AI provider settings, encrypted credentials and generation contracts",
         expect(headers.get("authorization")).toBe(`Bearer ${token}`);
         expect(body).toMatchObject({
           model: provider.model,
-          max_tokens: 1400,
+          max_tokens: provider.id === "groq" ? 5496 : 1400,
           stream: false,
           messages: [
             { role: "system", content: expect.stringContaining("JSON") },
@@ -299,6 +300,56 @@ describe("AI provider settings, encrypted credentials and generation contracts",
         model: provider.model,
         configured: expect.arrayContaining([provider.key]),
       });
+    },
+  );
+
+  it.each(providers)(
+    "uses the second supported model with the correct $label request contract",
+    async (provider) => {
+      const model = aiProviders[provider.id].models[1].id;
+      const settings = await request(
+        "/api/settings",
+        {
+          ...makeDemo().settings,
+          provider: provider.id,
+          model,
+        },
+        "PUT",
+      );
+      expect(settings.status).toBe(200);
+      let capturedBody: Promise<string> | undefined;
+      const path =
+        provider.id === "gemini"
+          ? `/v1beta/models/${model}:generateContent`
+          : provider.path;
+      mock
+        .get(provider.origin)
+        .intercept({ path, method: "POST" })
+        .reply(200, (opts) => {
+          capturedBody = bodyText(opts.body);
+          return reply(provider.id);
+        });
+      expect((await generate()).status).toBe(200);
+      const body = JSON.parse(await capturedBody!);
+      if (provider.id === "gemini") {
+        expect(body.generationConfig.thinkingConfig).toEqual({
+          thinkingBudget: 0,
+        });
+      } else {
+        expect(body.model).toBe(model);
+        if (provider.id === "groq") {
+          expect(body).toMatchObject({
+            reasoning_effort: "low",
+            include_reasoning: false,
+            max_tokens: 5496,
+          });
+        }
+      }
+      const workspace = await request("/api/workspace");
+      expect(
+        ((await workspace.json()) as { settings: { model: string } }).settings
+          .model,
+      ).toBe(model);
     },
   );
 
@@ -339,7 +390,7 @@ describe("AI provider settings, encrypted credentials and generation contracts",
         expect(body.generationConfig.maxOutputTokens).toBe(6000);
         expect(JSON.parse(body.contents[0].parts[0].text)).toMatchObject(brief);
       } else {
-        expect(body.max_tokens).toBe(6000);
+        expect(body.max_tokens).toBe(provider.id === "groq" ? 10096 : 6000);
         expect(JSON.parse(body.messages[1].content)).toMatchObject(brief);
       }
       const saved = await db
@@ -500,7 +551,7 @@ describe("AI provider settings, encrypted credentials and generation contracts",
       {
         ...makeDemo().settings,
         provider: "cloudflare",
-        model: "@cf/meta/llama-3.1-8b-instruct",
+        model: "@cf/meta/llama-3.1-8b-instruct-fast",
       },
       "PUT",
     );
@@ -510,6 +561,46 @@ describe("AI provider settings, encrypted credentials and generation contracts",
       error: "Binding Workers AI belum dikonfigurasi.",
     });
   });
+  it.each([
+    { provider: "groq", model: "gemini-2.5-flash" },
+    { provider: "gemini", model: "unknown-model" },
+    { provider: "cloudflare", model: "@cf/meta/llama-3.1-8b-instruct" },
+  ] as { provider: AIProvider; model: string }[])(
+    "rejects unsupported $provider model $model without changing settings",
+    async ({ provider, model }) => {
+      const before = await (await request("/api/workspace")).json();
+      const result = await request(
+        "/api/settings",
+        { ...makeDemo().settings, provider, model },
+        "PUT",
+      );
+      expect(result.status).toBe(400);
+      expect(await (await request("/api/workspace")).json()).toEqual(before);
+    },
+  );
+
+  it("migrates retired model settings on read without erasing other preferences", async () => {
+    const settings = {
+      ...makeDemo().settings,
+      provider: "groq",
+      model: "llama-3.1-8b-instant",
+      timezone: "UTC",
+    };
+    await db
+      .prepare("UPDATE settings SET data=? WHERE id=1")
+      .bind(JSON.stringify(settings))
+      .run();
+    const workspace = (await (await request("/api/workspace")).json()) as {
+      settings: object;
+    };
+    expect(workspace.settings).toMatchObject({
+      ...settings,
+      model: "openai/gpt-oss-20b",
+    });
+    const ready = await request("/api/ready");
+    expect(ready.status).toBe(200);
+  });
+
   it("rejects unknown providers in settings", async () => {
     const result = await request(
       "/api/settings",

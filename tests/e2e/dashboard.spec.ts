@@ -1,3 +1,4 @@
+import { aiProviderIds, aiProviders } from "../../src/aiProviders";
 import { test, expect } from "@playwright/test";
 import { makeDemo } from "../../src/domain";
 import { defaultAgents } from "../../src/studio";
@@ -58,7 +59,9 @@ test("demo creates a draft, preserves edits, requires a video, then schedules ap
   await page.keyboard.press("Escape");
   await page.reload();
   await page.getByRole("button", { name: /Content library/ }).click();
-  await page.getByLabel("Cari konten").fill("Rutinitas kreatif pagi hari");
+  await page
+    .getByLabel("Cari konten", { exact: true })
+    .fill("Rutinitas kreatif pagi hari");
   await page.locator(".content-card").click();
   await expect(page.getByLabel("Caption", { exact: true })).toHaveValue(
     "Caption final yang akan disetujui",
@@ -405,7 +408,7 @@ test("saving a new live caption clears the consent given for the previous revisi
   expect(item.revision).toBe(1);
 });
 
-test("AI settings offer all eight providers, select default models and retain a custom model", async ({
+test("AI settings offer exactly two matching models for each provider and persist the second choice", async ({
   page,
 }) => {
   await page.goto("/");
@@ -414,28 +417,24 @@ test("AI settings offer all eight providers, select default models and retain a 
     name: "Provider AI",
     exact: true,
   });
-  await expect(provider.locator("option")).toHaveText([
-    "OpenRouter",
-    "Cloudflare Workers AI",
-    "Gemini",
-    "NVIDIA NIM",
-    "Cohere",
-    "Hugging Face",
-    "Mistral",
-    "Groq",
-  ]);
-  for (const [id, model] of [
-    ["gemini", "gemini-2.5-flash-lite"],
-    ["nvidia", "meta/llama-3.1-8b-instruct"],
-    ["cohere", "command-a-03-2025"],
-    ["huggingface", "meta-llama/Llama-3.3-70B-Instruct"],
-    ["mistral", "mistral-small-latest"],
-    ["groq", "llama-3.3-70b-versatile"],
-    ["cloudflare", "@cf/meta/llama-3.1-8b-instruct"],
-    ["openrouter", "openai/gpt-4o-mini"],
-  ]) {
+  const model = page.getByRole("combobox", { name: "Model", exact: true });
+  await expect(provider.locator("option")).toHaveText(
+    aiProviderIds.map((id) => aiProviders[id].label),
+  );
+  for (const id of aiProviderIds) {
     await provider.selectOption(id);
-    await expect(page.getByLabel("Model", { exact: true })).toHaveValue(model);
+    await expect(model.locator("option")).toHaveCount(2);
+    await expect(model).toHaveValue(aiProviders[id].defaultModel);
+    for (const choice of aiProviders[id].models) {
+      await model.selectOption(choice.id);
+      await expect(model).toHaveValue(choice.id);
+      await expect(page.locator(".selected-model-info")).toContainText(
+        choice.description,
+      );
+      await expect(page.locator(".selected-model-info code")).toHaveText(
+        choice.id,
+      );
+    }
   }
   for (const label of [
     "OpenRouter API key",
@@ -447,8 +446,6 @@ test("AI settings offer all eight providers, select default models and retain a 
     "Groq API key",
   ])
     await expect(page.getByLabel(label, { exact: true })).toBeDisabled();
-  await provider.selectOption("groq");
-  await page.getByLabel("Model", { exact: true }).fill("llama-3.1-8b-instant");
   await page
     .getByRole("button", { name: "Simpan settings", exact: true })
     .click();
@@ -456,7 +453,25 @@ test("AI settings offer all eight providers, select default models and retain a 
   await page.reload();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(provider).toHaveValue("groq");
-  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
-    "llama-3.1-8b-instant",
-  );
+  await expect(model).toHaveValue("openai/gpt-oss-20b");
+});
+
+test("legacy local model preferences recover to supported choices", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const data = JSON.parse(localStorage.getItem("byga-workspace-v1")!);
+    data.settings = {
+      ...data.settings,
+      provider: "cloudflare",
+      model: "@cf/meta/llama-3.1-8b-instruct",
+    };
+    localStorage.setItem("byga-workspace-v1", JSON.stringify(data));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Model", exact: true }),
+  ).toHaveValue("@cf/meta/llama-3.1-8b-instruct-fast");
 });

@@ -2,7 +2,7 @@
 
 Kantor AI 3D interaktif dan pipeline konten TikTok, berdasarkan PRD **AI Agent Dashboard 3D Interaktif — Social Media**.
 
-[Status implementasi](docs/STATUS.md) · [Panduan studio kreatif](docs/STUDIO.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot studio](docs/studio-office.png) · [Chat desktop](docs/studio-chat-desktop.png) · [Chat mobile](docs/studio-chat-mobile.png)
+[Pembaruan UI premium & mobile](docs/UI-REFRESH.md) · [Status implementasi](docs/STATUS.md) · [Panduan studio kreatif](docs/STUDIO.md) · [PRD sumber](docs/PRD.md) · [Hasil validasi](docs/VALIDATION.md) · [Screenshot studio](docs/studio-office.png) · [Chat desktop](docs/studio-chat-desktop.png) · [Chat mobile](docs/studio-chat-mobile.png)
 
 Audit produksi terbaru: [gate rilis, syarat penerimaan dan pemulihan](docs/PRODUCTION.md). Kode telah diuji secara lokal; deployment tujuan dan integrasi eksternal tetap memerlukan bukti produksi.
 
@@ -29,7 +29,7 @@ npm run worker:dev -- --port 8787
 npm run dev -- --port 5173
 ```
 
-Pilih Settings → **Masuk backend live**. Gunakan alamat host yang sesuai APP_URL; Vite mem-proxy `/api` ke Worker lokal. Backend live dimulai dengan data kosong. Tambahkan akun, pilih provider AI (OpenRouter, Cloudflare Workers AI, Gemini, NVIDIA NIM, Cohere, Hugging Face, Mistral, atau Groq), isi API key/token provider melalui Settings, pilih model, lalu generate caption dan prompt video. Model default terisi saat provider diganti dan tetap dapat diedit; lihat [daftar model dan aktivasi AI](docs/INTEGRATIONS.md#provider-ai). Workers AI memerlukan binding `AI` dan model `@cf/...`; tambahkan `"ai":{"binding":"AI"}` pada konfigurasi lokal atau gunakan `BYGA_ENABLE_WORKERS_AI=true` saat deploy. Tidak ada generator video otomatis.
+Pilih Settings → **Masuk backend live**. Gunakan alamat host yang sesuai APP_URL; Vite mem-proxy `/api` ke Worker lokal. Backend live dimulai dengan data kosong. Tambahkan akun, pilih provider AI (OpenRouter, Cloudflare Workers AI, Gemini, NVIDIA NIM, Cohere, Hugging Face, Mistral, atau Groq), isi API key/token provider melalui Settings, pilih model, lalu generate caption dan prompt video. Setiap provider menyediakan tepat dua model melalui dropdown; model default terpilih saat provider diganti. Model lama disesuaikan ke pilihan yang didukung; lihat [daftar model dan aktivasi AI](docs/INTEGRATIONS.md#provider-ai). Workers AI memerlukan binding `AI` dan model `@cf/...`; tambahkan `"ai":{"binding":"AI"}` pada konfigurasi lokal atau gunakan `BYGA_ENABLE_WORKERS_AI=true` saat deploy. Tidak ada generator video otomatis.
 
 Settings menyimpan key dengan AES-GCM di D1. Master key dan password login harus tetap menjadi **Worker secrets**; master key tidak dapat disimpan di database yang sama dengan ciphertext. Mengganti master key tanpa migrasi membuat key sebelumnya tidak dapat dibaca. Nilai key tidak dikembalikan oleh API. Sesi menggunakan cookie HttpOnly/SameSite, kadaluarsa 24 jam, login dibatasi 10 percobaan per 15 menit, mutasi memeriksa Origin. Proxy/host publik harus menggunakan HTTPS. Demo bukan sistem login untuk produksi.
 

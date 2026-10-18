@@ -4,7 +4,7 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { z } from "zod";
 import { registerStudioRoutes } from "./studio";
 import { StudioConflict } from "../src/studio";
-import { aiProviderIds } from "../src/aiProviders";
+import { aiProviderIds, isProviderModel } from "../src/aiProviders";
 import {
   approve,
   schedule,
@@ -48,7 +48,7 @@ import {
 } from "./research";
 import { registerAnalyticsRoutes, syncAnalytics, recommend } from "./analytics";
 const app = new Hono<{ Bindings: Env }>();
-const settingsSchema = z.object({
+const storedSettingsSchema = z.object({
   provider: z.enum(aiProviderIds),
   model: z.string().trim().min(1).max(120),
   retentionMonths: z.number().int().min(1).max(12),
@@ -62,6 +62,13 @@ const settingsSchema = z.object({
     .default("Asia/Jakarta"),
   avatarAssetId: z.string().max(100).optional(),
 });
+const settingsSchema = storedSettingsSchema.refine(
+  (settings) => isProviderModel(settings.provider, settings.model),
+  {
+    path: ["model"],
+    message: "Pilih salah satu dari dua model provider yang tersedia.",
+  },
+);
 const accountSchema = z.object({
   name: z.string().trim().min(1).max(60),
   handle: z.string().regex(/^@[A-Za-z0-9_.]{1,24}$/),
@@ -183,7 +190,7 @@ app.get("/api/ready", async (c) => {
     ]);
     if (
       !settings ||
-      !settingsSchema.safeParse(JSON.parse(settings.data)).success
+      !storedSettingsSchema.safeParse(JSON.parse(settings.data)).success
     )
       return c.json({ ok: false }, 503);
     return c.json({ ok: true });

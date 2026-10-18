@@ -112,6 +112,7 @@ export async function aiText(
       generationConfig: {
         responseMimeType: "application/json",
         maxOutputTokens: maxTokens,
+        thinkingConfig: { thinkingBudget: 0 },
       },
     };
   } else {
@@ -127,6 +128,12 @@ export async function aiText(
     // Those adapters use the JSON instruction and validate the generated object.
     if (providerId !== "nvidia" && providerId !== "huggingface")
       body.response_format = { type: "json_object" };
+    if (providerId === "groq") {
+      // GPT OSS budgets include reasoning tokens; reserve room for the final JSON.
+      body.max_tokens = maxTokens + 4096;
+      body.reasoning_effort = "low";
+      body.include_reasoning = false;
+    }
     if (providerId === "openrouter") {
       headers["HTTP-Referer"] = env.APP_URL;
       headers["X-Title"] = "Byga Agency";
