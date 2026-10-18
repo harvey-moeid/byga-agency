@@ -53,13 +53,13 @@ function TikTokPublicEmbed({ handle }: { handle: string }) {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = handle;
-    section.append(link);
-    block.append(section);
-    host.append(block);
+    section.appendChild(link);
+    block.appendChild(section);
+    host.appendChild(block);
     const script = document.createElement("script");
     script.async = true;
     script.src = "https://www.tiktok.com/embed.js";
-    host.append(script);
+    host.appendChild(script);
     return () => {
       script.remove();
       host.replaceChildren();
