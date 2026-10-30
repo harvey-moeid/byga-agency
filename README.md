@@ -41,6 +41,14 @@ Mulai **Proyek baru**, isi brief yang tersimpan otomatis, lalu tinjau dan setuju
 
 Jalankan `npm run db:migrate:local` untuk menambahkan tabel studio dari `0004_creative_studio.sql` pada backend lokal. Deployment menjalankan migrasi sebelum deploy. Lihat [panduan studio, revisi dan API](docs/STUDIO.md).
 
+## Creative Prompt Studio (ChatGPT → Google Flow)
+
+Menu **Creative Prompt Studio** menyediakan enam tahap: brief/storyboard, builder prompt gambar, image assets, builder prompt video, video assets, serta review/export. Template native bekerja tanpa API; default TikTok **5 × 6 detik / 9:16**. Sebelas preset gambar, gerakan kamera/karakter, lock karakter/lingkungan, editor/copy TXT/JSON, preset custom, histori scene, dan upload R2 terhubung ke proyek serta Content Library existing.
+
+Pengguna menyalin prompt ke ChatGPT/Google Flow dan mengimpor hasil secara manual. AI Enhance opsional memakai agen/provider Agency dan menghasilkan usulan untuk ditinjau. OpenAI Images/Gemini Omni media API berstatus **Belum dikonfigurasi**. Tidak ada generasi/publish otomatis dari tombol tautan. Durasi UGC lama **5/8/10** tetap kompatibel; konversi Creative bersifat eksplisit. Terapkan migrasi additive `0005_creative_prompt_studio.sql` untuk relasi aset dan perlindungan attach/delete.
+
+[Panduan Bahasa Indonesia, contoh TikTok 30 detik, API, troubleshooting dan deployment](docs/STUDIO.md#creative-prompt-studio--panduan-produksi-30-oktober-2026) · [Audit dan hasil implementasi](docs/CREATIVE-STUDIO-DELIVERY.md).
+
 ## Generator prompt UGC cerita
 
 Buka **Prompt UGC** di sidebar. Pilih akun draft, tulis ide cerita, produk/brand opsional, karakter, audiens dan gaya. Pilih 3–6 adegan dengan durasi 5, 8 atau 10 detik per adegan. Backend live menggunakan provider AI di Settings; demo membuat contoh template tanpa panggilan AI.

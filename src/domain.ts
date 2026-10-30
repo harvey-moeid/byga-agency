@@ -42,6 +42,7 @@ export interface Content {
   researchIds?: string[];
   ugc?: UGCStory;
   studioProjectId?: string;
+  creative?: import("./creative").CreativeProject;
 }
 export interface Competitor {
   id: string;

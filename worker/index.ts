@@ -1,3 +1,4 @@
+import { creativeAssetIds } from "../src/creative";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
@@ -185,6 +186,9 @@ app.get("/api/ready", async (c) => {
       ).all(),
       c.env.DB.prepare(
         "SELECT lease_until FROM notification_jobs LIMIT 0",
+      ).all(),
+      c.env.DB.prepare(
+        "SELECT file_id FROM studio_asset_references LIMIT 0",
       ).all(),
       c.env.FILES.head("__byga_readiness__"),
     ]);
@@ -587,6 +591,12 @@ app.post("/api/files", async (c) => {
           : mp4
             ? "video/mp4"
             : "video/webm";
+  if (
+    file.type &&
+    file.type !== "application/octet-stream" &&
+    file.type !== mime
+  )
+    throw new Error("MIME type tidak sesuai signature file.");
   const mediaValue = form.get("media");
   const media =
     !glb && !image && typeof mediaValue === "string"
@@ -683,7 +693,15 @@ app.delete("/api/files/:id", async (c) => {
   const rows = await c.env.DB.prepare("SELECT data FROM contents").all<{
     data: string;
   }>();
-  if (rows.results.some((x) => JSON.parse(x.data).fileId === id))
+  if (
+    rows.results.some((x) => {
+      const content = JSON.parse(x.data) as Content;
+      return (
+        content.fileId === id ||
+        (content.creative && creativeAssetIds(content.creative).includes(id))
+      );
+    })
+  )
     return c.json(
       { error: "File digunakan konten. Tidak dapat dihapus." },
       409,
@@ -700,7 +718,12 @@ app.delete("/api/files/:id", async (c) => {
       .bind(id, id, id)
       .first(),
   ]);
-  if (characterRef || projectRef)
+  const creativeRef = await c.env.DB.prepare(
+    "SELECT project_id FROM studio_asset_references WHERE file_id=? LIMIT 1",
+  )
+    .bind(id)
+    .first();
+  if (characterRef || projectRef || creativeRef)
     return c.json(
       {
         error:

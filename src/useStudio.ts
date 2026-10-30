@@ -1,3 +1,13 @@
+import {
+  applyCreative,
+  creativeCommandSchema,
+  creativeDraft,
+  creativeExport,
+  createCreative,
+  initCreative,
+  syncCreativeCharacter,
+  type CreativeCommand,
+} from "./creative";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api";
 import type { Content, Room } from "./domain";
@@ -11,6 +21,7 @@ import {
   defaultAgents,
   demoStudioTurn,
   projectSummary,
+  requireRevision,
   rejectProposal,
   stopTurn,
   type CharacterProfile,
@@ -231,7 +242,12 @@ export function useStudio({
       return project;
     });
   }
-  async function create(name: string, accountId: string, brief?: ProjectBrief) {
+  async function create(
+    name: string,
+    accountId: string,
+    brief?: ProjectBrief,
+    creative = false,
+  ) {
     selection.current++;
     return execute(() =>
       serial(async () => {
@@ -241,8 +257,12 @@ export function useStudio({
               name,
               accountId,
               brief,
+              creative,
             })
-          : createProject(name, accountId, brief);
+          : {
+              ...createProject(name, accountId, brief),
+              ...(creative ? { creative: createCreative() } : {}),
+            };
         if (current !== epoch.current) return;
         putProject(project);
         setActiveId(project.id);
@@ -313,6 +333,11 @@ export function useStudio({
         if (current !== epoch.current) return;
         apply({
           ...ref.current,
+          projects: ref.current.projects.map((p) =>
+            p.creative
+              ? { ...p, creative: syncCreativeCharacter(p.creative, next) }
+              : p,
+          ),
           characters: [
             next,
             ...ref.current.characters.filter((c) => c.id !== next.id),
@@ -460,6 +485,128 @@ export function useStudio({
       }),
     );
   }
+  async function creativeCommand(id: string, command: CreativeCommand) {
+    const expected = getProject(id).revision;
+    return execute(() =>
+      serial(async () => {
+        const current = epoch.current,
+          previous = getProject(id);
+        requireRevision(previous, expected);
+        creativeCommandSchema.parse(command);
+        if (previous.run)
+          throw new Error("Tunggu atau hentikan agen sebelum menyimpan.");
+        let result: { project: StudioProject; content?: Content };
+        try {
+          if (live)
+            result = await api(`/studio/projects/${id}/creative`, {
+              expectedRevision: expected,
+              command,
+            });
+          else {
+            const creative =
+              command.action === "init"
+                ? initCreative(previous, command.convertDuration)
+                : previous.creative;
+            if (!creative)
+              throw new Error("Inisialisasi Creative Studio dahulu.");
+            const next = changed({
+              ...previous,
+              creative: applyCreative(creative, command),
+            });
+            let content: Content | undefined;
+            if (command.action === "export") {
+              // Same deterministic marker as live, using Web Crypto in the browser.
+              const digest = await crypto.subtle.digest(
+                "SHA-256",
+                new TextEncoder().encode(creativeExport(creative, "txt")),
+              );
+              const key = [...new Uint8Array(digest)]
+                .map((x) => x.toString(16).padStart(2, "0"))
+                .join("");
+              if (creative.exported?.key === key) return previous;
+              content = creativeDraft(next);
+              next.creative = {
+                ...next.creative!,
+                exported: { key, contentId: content.id },
+              };
+            }
+            if (
+              new TextEncoder().encode(JSON.stringify(next)).byteLength >
+              1_500_000
+            )
+              throw new Error(
+                "Riwayat proyek penuh. Ekspor lalu buat proyek lanjutan.",
+              );
+            result = { project: next, content };
+          }
+          if (current !== epoch.current) return;
+          putProject(result.project);
+          if (result.content) await callbacks.current.onContent(result.content);
+          return result.project;
+        } catch (e) {
+          if (live && e instanceof ApiError && e.status === 409) {
+            const latest = await api<StudioProject>(`/studio/projects/${id}`);
+            if (current === epoch.current) putProject(latest);
+          }
+          throw e;
+        }
+      }),
+    );
+  }
+  async function enhanceCreative(
+    id: string,
+    sceneId: string,
+    kind: "image" | "video" | "story" | "review",
+  ) {
+    if (!live) {
+      setError(
+        "AI Enhance memerlukan backend live dan provider di Settings. Template tetap tersedia.",
+      );
+      return;
+    }
+    if (workRef.current) return;
+    return execute(async () => {
+      const current = epoch.current;
+      await queue.current.catch(() => undefined);
+      if (current !== epoch.current) return;
+      const previous = getProject(id),
+        runId = crypto.randomUUID();
+      const agentId =
+        kind === "image"
+          ? "schedule"
+          : kind === "video"
+            ? "publish"
+            : kind === "story"
+              ? "content"
+              : "analytics";
+      workRef.current = { projectId: id, agentId, runId };
+      setWorking(workRef.current);
+      const abort = new AbortController();
+      controller.current = abort;
+      try {
+        const next = await studioRequest<StudioProject>(
+          `/studio/projects/${id}/creative/enhance`,
+          { expectedRevision: previous.revision, sceneId, kind, runId },
+          abort.signal,
+        );
+        if (current === epoch.current && workRef.current?.runId === runId)
+          putProject(next);
+        return next;
+      } catch (error) {
+        if (abort.signal.aborted || current !== epoch.current) return;
+        const latest = await api<StudioProject>(`/studio/projects/${id}`).catch(
+          () => undefined,
+        );
+        if (latest && current === epoch.current) putProject(latest);
+        throw error;
+      } finally {
+        if (workRef.current?.runId === runId) {
+          workRef.current = undefined;
+          setWorking(undefined);
+        }
+      }
+    });
+  }
   return {
     ...state,
     summaries,
@@ -483,6 +630,8 @@ export function useStudio({
     select,
     create,
     saveBrief,
+    creativeCommand,
+    enhanceCreative,
     saveAgent,
     saveCharacter,
     turn,

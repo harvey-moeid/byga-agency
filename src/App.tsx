@@ -1,3 +1,6 @@
+import CreativeStudio, { CreativeReview } from "./CreativeStudio";
+import { creativeAssetIds } from "./creative";
+import { validateCreativeMedia } from "./creativeMedia";
 import {
   lazy,
   Suspense,
@@ -88,6 +91,7 @@ type Page =
   | "office"
   | "research"
   | "content"
+  | "creative"
   | "ugc"
   | "projects"
   | "schedule"
@@ -101,6 +105,7 @@ const nav = [
   { id: "research", title: "Riset & inspirasi", icon: Compass },
   { id: "content", title: "Content library", icon: Layers3 },
   { id: "ugc", title: "Prompt UGC", icon: Sparkles },
+  { id: "creative", title: "Creative Prompt Studio", icon: Sparkles },
   { id: "schedule", title: "Kalender", icon: CalendarDays },
   { id: "publish", title: "Publishing", icon: Send },
   { id: "analytics", title: "Analytics", icon: BarChart3 },
@@ -556,6 +561,38 @@ export default function App() {
       setToast("Perubahan tersimpan.");
     });
   }
+  async function uploadCreative(file: File): Promise<string | undefined> {
+    let id: string | undefined;
+    await task(async () => {
+      await validateCreativeMedia(file);
+      const media = file.type.startsWith("video/")
+        ? await videoMetadata(file)
+        : undefined;
+      if (live) {
+        const form = new FormData();
+        form.append("file", file);
+        if (media) form.append("media", JSON.stringify(media));
+        id = (await api<{ id: string }>("/files", form)).id;
+        await refresh();
+      } else {
+        id = crypto.randomUUID();
+        await saveVideo(id, file);
+        const asset = {
+          id,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          createdAt: new Date().toISOString(),
+          media,
+        };
+        setWorkspace((w) => ({ ...w, assets: [asset, ...w.assets] }));
+      }
+      setToast(
+        "Aset Creative tersimpan. Hubungkan ke scene untuk melanjutkan.",
+      );
+    });
+    return id;
+  }
   async function uploadReference(file: File): Promise<string | undefined> {
     let id: string | undefined;
     await task(async () => {
@@ -986,7 +1023,10 @@ export default function App() {
           <p className="muted small">
             Live memerlukan backend Cloudflare dan Worker secrets.
           </p>
-          <nav className="legal-links login-legal-links" aria-label="Informasi hukum">
+          <nav
+            className="legal-links login-legal-links"
+            aria-label="Informasi hukum"
+          >
             <a href="/privacy-policy.html">Privacy Policy</a>
             <a href="/terms-of-service.html">Terms of Service</a>
           </nav>
@@ -1530,6 +1570,15 @@ export default function App() {
                 if (item) setDetail(item);
                 else setToast("Draft tidak ditemukan. Muat ulang workspace.");
               }}
+            />
+          )}
+          {page === "creative" && (
+            <CreativeStudio
+              studio={studio}
+              accounts={workspace.accounts}
+              assets={workspace.assets}
+              live={live}
+              onUpload={uploadCreative}
             />
           )}
           {page === "ugc" && (
@@ -2121,7 +2170,14 @@ export default function App() {
                             throw new Error(
                               "Aset avatar sedang digunakan. Ganti pilihan di Settings.",
                             );
-                          if (workspace.contents.some((c) => c.fileId === a.id))
+                          if (
+                            workspace.contents.some(
+                              (c) =>
+                                c.fileId === a.id ||
+                                (c.creative &&
+                                  creativeAssetIds(c.creative).includes(a.id)),
+                            )
+                          )
                             throw new Error(
                               "File masih digunakan konten dan tidak dapat dihapus.",
                             );
@@ -2131,6 +2187,10 @@ export default function App() {
                             ) ||
                             studio.projects.some(
                               (p) =>
+                                (p.creative &&
+                                  creativeAssetIds(p.creative).includes(
+                                    a.id,
+                                  )) ||
                                 p.briefDraft.characterProfile
                                   ?.referenceAssetId === a.id ||
                                 p.brief?.data.characterProfile
@@ -2641,8 +2701,12 @@ export default function App() {
                   accounts={workspace.accounts}
                   live={live}
                   configured={Boolean(
-                    workspace.settings.configured?.includes("tiktokClientKey") &&
-                    workspace.settings.configured?.includes("tiktokClientSecret")
+                    workspace.settings.configured?.includes(
+                      "tiktokClientKey",
+                    ) &&
+                    workspace.settings.configured?.includes(
+                      "tiktokClientSecret",
+                    ),
                   )}
                   onConnect={(account) => {
                     void task(async () => {
@@ -2650,7 +2714,9 @@ export default function App() {
                         "/accounts/" + account.id + "/oauth",
                         {},
                       );
-                      if (new URL(result.url).origin !== "https://www.tiktok.com")
+                      if (
+                        new URL(result.url).origin !== "https://www.tiktok.com"
+                      )
                         throw new Error("URL OAuth tidak valid.");
                       location.assign(result.url);
                     });
@@ -2917,7 +2983,7 @@ export default function App() {
                     .then((project) => {
                       if (project) {
                         setDetail(null);
-                        navigate("projects");
+                        navigate(project.creative ? "creative" : "projects");
                       }
                     });
                 }}
@@ -2926,6 +2992,9 @@ export default function App() {
               </button>
             )}
           </div>
+          {detail.creative && (
+            <CreativeReview creative={detail.creative} live={live} />
+          )}
           <div className="detail-grid">
             <div>
               <VideoPreview id={detail.fileId} live={live} />
