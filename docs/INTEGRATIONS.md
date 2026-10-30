@@ -76,3 +76,13 @@ Migrasi `0003_job_safety.sql` menambahkan receipt cron dan lease notifikasi. Sat
 ## Studio kreatif dan percakapan agen
 
 Terapkan `0004_creative_studio.sql` untuk proyek, profil agen dan karakter cerita. Chat/tahap memakai provider AI yang dipilih di Settings, dengan hasil terstruktur yang divalidasi dan persetujuan eksplisit sebelum mengubah konteks approved. Gambar referensi PNG/JPG/WebP disimpan ke R2 melalui endpoint file yang sama, maksimal 5 MB. Panduan penggunaan, endpoint, invalidasi revisi, pembatalan dan batas penyimpanan ada di [STUDIO.md](STUDIO.md).
+
+## Creative Prompt Studio: ChatGPT / Google Flow / AI Enhance
+
+Mode default adalah template deterministik tanpa API. Tautan resmi membuka ChatGPT dan Flow; pengguna sendiri menempel prompt, mengunggah referensi, men-download dan mengimpor hasil. Tidak ada auto-fill, browser automation, bypass login, atau klaim generasi eksternal berhasil.
+
+Profil capability `google-flow-omni-flash-1.1` terpisah dari katalog provider teks Agency: durasi 4/6/8/10, rasio 9:16/16:9, first/last/reference. Diverifikasi dari [Google Flow supported features](https://support.google.com/flow/answer/16352836) pada 30 Oktober 2026. ID API resmi `gemini-omni-1.1-flash` dan Interactions API dibaca dari [dokumentasi Omni](https://ai.google.dev/gemini-api/docs/omni); integrasi generasi media ini **belum diimplementasikan/dikonfigurasi/diuji live**. UI menampilkan status itu tanpa tombol generate API palsu.
+
+AI Enhance teks memakai `aiText`, delapan provider dan credential terenkripsi existing, serta empat agen kreatif existing. Usulan terikat scene/konteks dan menunggu pengguna menerapkan; run bisa dibatalkan. Tanpa key, error ditampilkan dan template tetap bekerja. Pengujian request provider memakai fetch mock dengan jaringan luar dimatikan, bukan bukti provider live. Panduan lengkap: [Creative Prompt Studio](STUDIO.md#creative-prompt-studio--panduan-produksi-30-oktober-2026).
+
+Referensi desain dipelajari dari [Universal Prompt Studio](https://github.com/thinkrtank/universal-prompt-studio) dan [Gemini Omni Video Skills](https://github.com/jggomez/gemini-omni-video-skills). Kedua LICENSE ditinjau sebagai MIT. Implementasi BYGA ditulis native TypeScript/React; tidak ada kode/aset upstream yang disalin. Ide yang dipakai: builder terstruktur, preset/capability warnings, kontinuitas, gerakan konkret, timing, audio, dan alur transfer manual. Dukungan model mengacu sumber Google resmi, tidak mengikuti ID preview repository referensi secara membuta.

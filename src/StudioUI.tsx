@@ -1372,7 +1372,10 @@ export function ProjectsPage({
   onUpload: (file: File) => Promise<string | undefined>;
   onContent: (id: string) => void;
 }) {
-  const project = studio.project;
+  const project =
+    studio.project?.creative && studio.project.creative.origin !== "ugc"
+      ? undefined
+      : studio.project;
   const [tab, setTab] = useState<
     "brief" | "results" | "characters" | "versions"
   >("brief");
@@ -1395,25 +1398,27 @@ export function ProjectsPage({
       <div className="studio-projects-layout">
         <aside className="panel studio-project-list">
           <h2>Proyek Anda</h2>
-          {studio.summaries.map((p) => (
-            <button
-              className={`studio-project-item ${p.id === studio.activeId ? "active" : ""}`}
-              key={p.id}
-              onClick={() => void studio.select(p.id)}
-            >
-              <FolderOpen size={17} />
-              <span>
-                <strong>{p.name}</strong>
-                <small>
-                  {accounts.find((a) => a.id === p.accountId)?.name} ·{" "}
-                  {p.needsReview
-                    ? "Perlu ditinjau ulang"
-                    : stageNames[p.nextStage]}
-                </small>
-              </span>
-              <ArrowUpRight size={14} />
-            </button>
-          ))}
+          {studio.summaries
+            .filter((p) => !p.creative || p.legacyUGC)
+            .map((p) => (
+              <button
+                className={`studio-project-item ${p.id === studio.activeId ? "active" : ""}`}
+                key={p.id}
+                onClick={() => void studio.select(p.id)}
+              >
+                <FolderOpen size={17} />
+                <span>
+                  <strong>{p.name}</strong>
+                  <small>
+                    {accounts.find((a) => a.id === p.accountId)?.name} ·{" "}
+                    {p.needsReview
+                      ? "Perlu ditinjau ulang"
+                      : stageNames[p.nextStage]}
+                  </small>
+                </span>
+                <ArrowUpRight size={14} />
+              </button>
+            ))}
           {!studio.summaries.length && (
             <p className="muted">
               Belum ada proyek. Mulai dari ide kecil, lalu kembangkan bersama

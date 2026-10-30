@@ -1,3 +1,4 @@
+import type { CreativeProject } from "./creative";
 import { z } from "zod";
 import type { Content, Room } from "./domain";
 import {
@@ -42,13 +43,13 @@ export const presets = {
     label: "Pembuat prompt gambar",
     role: "Sutradara visual",
     instructions:
-      "Ubah adegan yang sudah disetujui menjadi prompt still frame fotorealistis 9:16 berbahasa Inggris. Jelaskan framing, cahaya, subjek, pakaian, produk dan latar. Pertahankan identitas antar adegan, tanpa kolase atau teks buatan.",
+      "Target ChatGPT image generation. Ubah adegan yang sudah disetujui menjadi prompt still frame fotorealistis 9:16 berbahasa Inggris. Jelaskan framing, cahaya, subjek, pakaian, produk dan latar. Pertahankan identitas antar adegan, tanpa kolase atau teks buatan.",
   },
   video: {
     label: "Pembuat prompt video",
     role: "Sutradara gerakan",
     instructions:
-      "Susun prompt image-to-video berbahasa Inggris yang memakai gambar adegan sebagai frame awal. Arahkan gerakan kamera, ekspresi dan satu aksi realistis sesuai durasi. Hindari morphing, perpindahan identitas dan gerakan berlebihan.",
+      "Target Google Flow Gemini Omni Flash 1.1; gunakan durasi profil proyek yang diberikan. Susun prompt image-to-video berbahasa Inggris yang memakai gambar adegan sebagai frame awal. Arahkan gerakan kamera, ekspresi dan satu aksi realistis sesuai durasi. Hindari morphing, perpindahan identitas dan gerakan berlebihan.",
   },
   reviewer: {
     label: "Reviewer konten",
@@ -106,6 +107,13 @@ export const defaultAgents: StudioAgent[] = [
 export const characterSchema = z.object({
   id: z.string().min(1).max(100),
   name: z.string().trim().min(1).max(60),
+  face: z.string().max(300).optional(),
+  hair: z.string().max(200).optional(),
+  skin: z.string().max(200).optional(),
+  accessories: z.string().max(200).optional(),
+  proportions: z.string().max(200).optional(),
+  style: z.string().max(200).optional(),
+  features: z.string().max(300).optional(),
   appearance: z.string().trim().min(5).max(500),
   outfit: z.string().trim().min(2).max(250),
   referenceAssetId: z.string().max(100).optional(),
@@ -217,6 +225,7 @@ export interface StudioProject {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  creative?: CreativeProject;
   briefDraft: ProjectBrief;
   brief?: Approved<ProjectBrief>;
   story?: ApprovedStory;
@@ -238,6 +247,8 @@ export interface ProjectSummary {
   name: string;
   revision: number;
   updatedAt: string;
+  creative?: boolean;
+  legacyUGC?: boolean;
   nextStage: StudioStage;
   needsReview: boolean;
 }
@@ -400,6 +411,8 @@ export function projectSummary(p: StudioProject): ProjectSummary {
     name: p.name,
     revision: p.revision,
     updatedAt: p.updatedAt,
+    creative: !!p.creative,
+    legacyUGC: p.creative?.origin === "ugc",
     nextStage: nextStage(p),
     needsReview:
       !!p.story &&
